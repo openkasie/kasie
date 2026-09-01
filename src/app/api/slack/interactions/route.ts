@@ -11,7 +11,7 @@ import {
   getRunById,
   resolvePendingAction,
 } from "@/lib/db/queries/runs";
-import { postSlackMessage } from "@/lib/slack/message";
+import { postSlackMessage, updateSlackMessage } from "@/lib/slack/message";
 
 const interactionSchema = z.object({
   type: z.string(),
@@ -25,6 +25,8 @@ const interactionSchema = z.object({
     )
     .optional(),
   user: z.object({ id: z.string(), name: z.string().optional() }).optional(),
+  channel: z.object({ id: z.string() }).optional(),
+  message: z.object({ ts: z.string() }).optional(),
 });
 
 /** Resolve the Slack channel + thread the pending action's run belongs to. */
@@ -67,11 +69,29 @@ export async function POST(request: Request) {
   const approved = verb === "approve";
   await resolvePendingAction(actionId, approved ? "approved" : "rejected", resolvedBy);
 
+  const approvalMessage =
+    payload.channel?.id && payload.message?.ts
+      ? { channel: payload.channel.id, ts: payload.message.ts }
+      : null;
+
   // Ack Slack within its 3s window; the resume itself can take a while.
   after(async () => {
     try {
       const botToken = await getSlackBotToken(project.id);
       const location = await resolveRunThread(project.id, pending.runId);
+
+      // Retire the buttons so the message reflects the decision.
+      if (botToken && approvalMessage) {
+        await updateSlackMessage(
+          approvalMessage.channel,
+          approvalMessage.ts,
+          approved
+            ? `Approved by ${resolvedBy}: \`${pending.toolName}\``
+            : `Rejected by ${resolvedBy}: \`${pending.toolName}\``,
+          botToken,
+          { blocks: [] },
+        );
+      }
 
       if (approved && runId === pending.runId) {
         const result = await orchestrator.resumeAfterApproval(

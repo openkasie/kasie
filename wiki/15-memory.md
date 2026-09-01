@@ -24,7 +24,7 @@ Honest caveat: with no AI gateway configured (`AI_GATEWAY_URL` and `AI_GATEWAY_A
 
 ## Retrieval: every run, automatically
 
-You never ask Kasie to check its memory; it always does. At the start of every run, the orchestrator (`src/lib/agents/orchestrator.ts`) calls `retrieveMemories(projectId, message, { speakerName })`, which runs two passes: it embeds the incoming message and pulls the top 5 closest triples by cosine distance, and when the speaker is known (Slack messages carry the resolved display name) it also pulls the most recent facts whose entity matches `person:<name>`. The two lists are deduped and `formatMemoriesForPrompt` injects them into the model prompt as:
+You never ask Kasie to check its memory; it always does. At the start of every run, the orchestrator (`src/lib/agents/orchestrator.ts`) calls `retrieveMemories(projectId, message, { speakerName })`, which runs two passes: it embeds the incoming message and pulls the top 5 closest triples by cosine distance (dropping anything farther than the `MEMORY_RELEVANCE_MAX_DISTANCE` cutoff of 0.6, so unrelated facts stop leaking into prompts), and when the speaker is known (Slack messages carry the resolved display name) it also pulls the most recent facts whose entity matches `person:<name>`. The two lists are deduped and `formatMemoriesForPrompt` injects them into the model prompt as:
 
 ```
 Relevant team memory:
@@ -44,13 +44,19 @@ Three writers exist today:
 
 3. **Integration discovery.** When you connect an app, the discovery pass stores 5 to 12 triples about what it found (repos, monitors, projects; see [Integrations](12-integrations.md)). This is why Kasie knows your repo names right after you connect GitHub.
 
+Writes dedup themselves: `storeMemoryTriple` looks for an existing triple with the same entity and relation whose target is near-identical (cosine distance at or below `MEMORY_DEDUP_MAX_DISTANCE`, 0.15). When it finds one, it refreshes that row (target, embedding, timestamp) instead of inserting a duplicate, so restated facts update in place.
+
+## Browsing and deleting memories
+
+The dashboard has a **Memory** page (`/dashboard/memory`) that lists stored triples newest-first with pagination, a search box that queries by meaning (embedding similarity), and a per-row "Forget" button. Deletes are recorded as `memory.deleted` audit events.
+
 ## What memory is not (yet)
 
 Straight talk about current limits:
 
-- **No editing or browsing UI.** There is no dashboard page for viewing or deleting memories. Managing them means SQL against `kasie_memories`.
-- **No deduplication or expiry.** Repeated auto-stores accumulate; nothing merges near-duplicates or ages facts out.
-- **Fixed retrieval depth.** Top 5 triples per run (the `limit = 5` default in `retrieveMemories`), with no relevance threshold: the closest 5 are injected even when nothing is truly relevant.
+- **No editing.** The Memory page lists, searches, and deletes; changing a fact means deleting it and letting the agent (or a conversation) restate it.
+- **No expiry.** Dedup keeps restatements from piling up, but facts never age out on their own.
+- **Fixed retrieval depth.** Top 5 triples per run (the `limit = 5` default in `retrieveMemories`); the relevance cutoff only filters, it does not go looking deeper.
 - **No cross-project sharing.** Isolation is strict by design; there is no org-level shared memory.
 
 ## Operator notes

@@ -52,11 +52,9 @@ export async function recordRunUsage(input: {
     actorUserId: run?.initiatedByUserId,
     actorType: run?.initiatedByApiKeyId
       ? "api_key"
-      : run?.source === "schedule"
+      : run?.source === "schedule" || run?.source === "initiative"
         ? "system"
-        : run?.source === "slack"
-          ? "agent"
-          : "agent",
+        : "agent",
     actorLabel:
       run?.source === "slack"
         ? "Slack"
@@ -64,7 +62,9 @@ export async function recordRunUsage(input: {
           ? "Agent API"
           : run?.source === "schedule"
             ? "Scheduled task"
-            : "Kasie",
+            : run?.source === "initiative"
+              ? "Initiative"
+              : "Kasie",
     resourceType: "run",
     resourceId: input.runId,
     resourceLabel: message,

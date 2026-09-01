@@ -1,10 +1,12 @@
-import { and, count, desc, eq, gte, inArray, max } from "drizzle-orm";
+import { and, count, desc, eq, gte, inArray, max, sql } from "drizzle-orm";
 import { db } from "../client";
 import {
   kasieIntegrations,
+  kasiePendingActions,
   kasieProjectConfig,
   kasieProjects,
   kasieRuns,
+  kasieSchedules,
 } from "../schema";
 
 const USER_RUN_SOURCES = ["slack", "api", "dashboard"] as const;
@@ -93,6 +95,95 @@ export async function listRecentUserMessages(projectId: string, limit = 8) {
       return typeof message === "string" ? message.trim() : "";
     })
     .filter(Boolean);
+}
+
+/** Unresolved approvals for the project, newest first. */
+export async function listPendingApprovals(projectId: string, limit = 10) {
+  return db
+    .select({
+      toolName: kasiePendingActions.toolName,
+      createdAt: kasiePendingActions.createdAt,
+    })
+    .from(kasiePendingActions)
+    .innerJoin(kasieRuns, eq(kasieRuns.id, kasiePendingActions.runId))
+    .where(
+      and(
+        eq(kasieRuns.projectId, projectId),
+        eq(kasiePendingActions.status, "pending"),
+      ),
+    )
+    .orderBy(desc(kasiePendingActions.createdAt))
+    .limit(limit);
+}
+
+/** Texts of the most recent completed initiative runs, newest first. */
+export async function listRecentInitiativeTexts(projectId: string, limit = 5) {
+  const rows = await db
+    .select({ output: kasieRuns.output })
+    .from(kasieRuns)
+    .where(
+      and(
+        eq(kasieRuns.projectId, projectId),
+        eq(kasieRuns.source, "initiative"),
+        eq(kasieRuns.status, "completed"),
+      ),
+    )
+    .orderBy(desc(kasieRuns.createdAt))
+    .limit(limit);
+
+  return rows
+    .map((r) => (r.output as { text?: unknown } | null)?.text)
+    .filter((t): t is string => typeof t === "string" && t.trim().length > 0)
+    .map((t) => t.trim());
+}
+
+/**
+ * Enabled schedules whose last `minRuns` completed runs all replied with the
+ * silence sentinel, i.e. they keep firing but never produce anything.
+ */
+export async function listSilentSchedules(
+  projectId: string,
+  sentinel: string,
+  minRuns = 3,
+) {
+  const schedules = await db
+    .select({ id: kasieSchedules.id, title: kasieSchedules.title })
+    .from(kasieSchedules)
+    .where(
+      and(eq(kasieSchedules.projectId, projectId), eq(kasieSchedules.enabled, true)),
+    );
+  if (schedules.length === 0) return [];
+
+  const runs = await db
+    .select({
+      scheduleId: sql<string | null>`${kasieRuns.input}->>'scheduleId'`,
+      output: kasieRuns.output,
+    })
+    .from(kasieRuns)
+    .where(
+      and(
+        eq(kasieRuns.projectId, projectId),
+        eq(kasieRuns.source, "schedule"),
+        eq(kasieRuns.status, "completed"),
+      ),
+    )
+    .orderBy(desc(kasieRuns.createdAt))
+    .limit(100);
+
+  const bySchedule = new Map<string, string[]>();
+  for (const run of runs) {
+    if (!run.scheduleId) continue;
+    const texts = bySchedule.get(run.scheduleId) ?? [];
+    if (texts.length >= minRuns) continue;
+    const text = (run.output as { text?: unknown } | null)?.text;
+    texts.push(typeof text === "string" ? text.trim() : "");
+    bySchedule.set(run.scheduleId, texts);
+  }
+
+  return schedules.filter((s) => {
+    const texts = bySchedule.get(s.id);
+    return texts?.length === minRuns && texts.every((t) => t === sentinel);
+  });
 }
 
 export async function listConnectedIntegrationSlugs(projectId: string) {

@@ -3,11 +3,11 @@ import { updateRunStatus } from "@/lib/db/queries/runs";
 import { createLogger } from "@/lib/log";
 import { deliverProactiveOutput } from "@/lib/proactive/deliver";
 import { getQueue } from "@/lib/queue";
-import type { RunJob } from "@/lib/ai/types";
+import type { RunHooks, RunJob } from "@/lib/ai/types";
 
 const log = createLogger("process-run");
 
-export async function processRunJob(job: RunJob) {
+export async function processRunJob(job: RunJob, hooks?: RunHooks) {
   const queue = getQueue();
   const jobLog = log.child({
     jobId: job.id,
@@ -34,7 +34,11 @@ export async function processRunJob(job: RunJob) {
 
     const message = String(job.payload.message ?? "");
     jobLog.debug("message run started", { messageLength: message.length });
-    const result = await orchestrator.executeRun(ctx, { message, metadata: job.payload });
+    const result = await orchestrator.executeRun(
+      ctx,
+      { message, metadata: job.payload },
+      hooks,
+    );
 
     // Proactive runs have no inbound Slack message to reply to; deliver here.
     if (source === "schedule" || source === "initiative") {
@@ -66,7 +70,7 @@ export async function processRunJob(job: RunJob) {
   }
 }
 
-export async function enqueueAndProcess(job: Omit<RunJob, "id">) {
+export async function enqueueAndProcess(job: Omit<RunJob, "id">, hooks?: RunHooks) {
   const queue = getQueue();
   const enqueued = await queue.enqueue(job);
   log.info("run enqueued for inline processing", {
@@ -75,6 +79,6 @@ export async function enqueueAndProcess(job: Omit<RunJob, "id">) {
     projectId: enqueued.projectId,
     source: enqueued.payload.source ?? "message",
   });
-  await processRunJob(enqueued);
+  await processRunJob(enqueued, hooks);
   return enqueued;
 }

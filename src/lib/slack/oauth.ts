@@ -73,6 +73,7 @@ type SlackOAuthAccess = {
   error?: string;
   access_token?: string;
   team?: { id?: string; name?: string };
+  authed_user?: { id?: string };
 };
 
 export async function exchangeSlackOAuthCode(code: string, origin: string) {
@@ -96,5 +97,6 @@ export async function exchangeSlackOAuthCode(code: string, origin: string) {
     teamId: payload.team.id,
     teamName: payload.team.name,
     botToken: payload.access_token,
+    authedUserId: payload.authed_user?.id,
   };
 }

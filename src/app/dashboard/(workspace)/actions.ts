@@ -18,9 +18,11 @@ import {
 } from "@/lib/db/queries/schedules";
 import { isValidCron, nextAfter } from "@/lib/proactive/cron";
 import { isCatalogSkill, sanitizeEnabledSkillIds } from "@/lib/skills/catalog";
+import { deleteMemory } from "@/lib/db/queries/memories";
 import {
   ApprovalActionSchema,
   ConfigUpdateSchema,
+  MemoryDeleteSchema,
   ScheduleDeleteSchema,
   ScheduleUpsertSchema,
   SkillToggleSchema,
@@ -189,6 +191,30 @@ function isValidTimezone(timezone: string): boolean {
   } catch {
     return false;
   }
+}
+
+export async function removeMemory(
+  raw: unknown,
+): Promise<{ ok: true } | { ok: false; error: string }> {
+  const { session, projectId } = await requireActiveProject();
+
+  const parsed = MemoryDeleteSchema.safeParse(raw);
+  if (!parsed.success) return { ok: false, error: "invalid input" };
+
+  const deleted = await deleteMemory(projectId, parsed.data.memoryId);
+  if (!deleted) return { ok: false, error: "memory not found" };
+
+  await auditProjectAction(projectId, {
+    session,
+    action: AuditActions.memoryDeleted,
+    resourceType: "memory",
+    resourceId: deleted.id,
+    resourceLabel: `${deleted.entity} ${deleted.relation}`,
+    metadata: { target: deleted.target },
+  });
+
+  revalidatePath("/dashboard/memory");
+  return { ok: true };
 }
 
 export async function toggleSchedule(

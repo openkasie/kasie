@@ -1,3 +1,4 @@
+import { capHistoryByBudget } from "@/lib/agents/history";
 import { buildRememberTool } from "@/lib/agents/memory-tool";
 import { buildRunSystemPrompt } from "@/lib/agents/system-prompt";
 import {
@@ -5,7 +6,14 @@ import {
   generateAgentResponseWithTools,
 } from "@/lib/ai/provider";
 import type { ToolSet } from "ai";
-import type { AgentMessage, RunContext, RunInput, RunResult } from "@/lib/ai/types";
+import type {
+  AgentMessage,
+  PendingActionRef,
+  RunContext,
+  RunHooks,
+  RunInput,
+  RunResult,
+} from "@/lib/ai/types";
 import { getProjectWithConfig } from "@/lib/db/queries/projects";
 import {
   createPendingAction,
@@ -38,6 +46,33 @@ function runLog(ctx: RunContext) {
   });
 }
 
+type InteractionRow = {
+  role: string;
+  content: string;
+  metadata: Record<string, unknown> | null;
+};
+
+// Prefix user turns with the speaker's name so multi-person threads and
+// person-keyed memory stay attributable.
+function attributed(content: string, name?: string): string {
+  return name ? `${name}: ${content}` : content;
+}
+
+function toAgentMessages(history: InteractionRow[]): AgentMessage[] {
+  return history
+    .filter((h) => h.role === "user" || h.role === "assistant")
+    .map((h) => ({
+      role: h.role as "user" | "assistant",
+      content:
+        h.role === "user"
+          ? attributed(
+              h.content,
+              typeof h.metadata?.userName === "string" ? h.metadata.userName : undefined,
+            )
+          : h.content,
+    }));
+}
+
 async function recordUsageSafe(
   ctx: RunContext,
   usage: { inputTokens: number; outputTokens: number } | undefined,
@@ -63,7 +98,11 @@ class KasieOrchestrator {
     return runIntegrationDiscovery(ctx, integrationId);
   }
 
-  async executeRun(ctx: RunContext, input: RunInput): Promise<RunResult> {
+  async executeRun(
+    ctx: RunContext,
+    input: RunInput,
+    hooks?: RunHooks,
+  ): Promise<RunResult> {
     const rl = runLog(ctx);
     rl.info("run started", { messageLength: input.message.length });
     await updateRunStatus(ctx.runId, "running");
@@ -87,24 +126,8 @@ class KasieOrchestrator {
     rl.debug("memories retrieved", { count: memories.length });
     const memoryContext = formatMemoriesForPrompt(memories);
 
-    // Prefix user turns with the speaker's name so multi-person threads and
-    // person-keyed memory stay attributable.
-    const attributed = (content: string, name?: string) =>
-      name ? `${name}: ${content}` : content;
-
     const messages: AgentMessage[] = [
-      ...history
-        .filter((h) => h.role === "user" || h.role === "assistant")
-        .map((h) => ({
-          role: h.role as "user" | "assistant",
-          content:
-            h.role === "user"
-              ? attributed(
-                  h.content,
-                  typeof h.metadata?.userName === "string" ? h.metadata.userName : undefined,
-                )
-              : h.content,
-        })),
+      ...capHistoryByBudget(toAgentMessages(history)),
       { role: "user", content: attributed(input.message, speakerName) },
     ];
 
@@ -151,6 +174,7 @@ class KasieOrchestrator {
         messages,
         tools,
         runId: ctx.runId,
+        onToolStart: hooks?.onToolStart,
       });
       text = result.text;
       usage = result.usage;
@@ -161,22 +185,24 @@ class KasieOrchestrator {
       });
 
       if (result.toolCalls.length > 0) {
-        const write = result.toolCalls[0];
-        rl.info("write tool blocked for approval", {
-          toolName: write.toolName,
+        rl.info("write tools blocked for approval", {
+          toolNames: result.toolCalls.map((t) => t.toolName),
         });
-        const action = await createPendingAction({
-          runId: ctx.runId,
-          toolName: write.toolName,
-          payload: write.args,
-        });
+        const pendingActions: PendingActionRef[] = [];
+        for (const write of result.toolCalls) {
+          const action = await createPendingAction({
+            runId: ctx.runId,
+            toolName: write.toolName,
+            payload: write.args,
+          });
+          pendingActions.push({ id: action.id, toolName: write.toolName });
+        }
         await updateRunStatus(ctx.runId, "awaiting_approval", {
           text,
-          pendingActionId: action.id,
-          pendingToolName: write.toolName,
+          pendingActions,
         });
         await recordUsageSafe(ctx, usage);
-        return { text, usage, pendingActionId: action.id };
+        return { text, usage, pendingActions };
       }
     } finally {
       await gateway.close();
@@ -259,13 +285,41 @@ class KasieOrchestrator {
       await gateway.close();
     }
 
+    // Resume with the same conversational context as a normal run: thread
+    // history (which includes this run's user message), the partial reply the
+    // agent gave before pausing, and the tool result as the newest turn.
+    const [history, memories] = await Promise.all([
+      getThreadInteractionHistory(run.threadId),
+      retrieveMemories(ctx.projectId, input.message),
+    ]);
+    const partialReply = (run.output as { text?: string } | null)?.text?.trim();
+    const resultJson = JSON.stringify(execResult.result ?? execResult).slice(0, 4000);
+
+    const messages: AgentMessage[] = [
+      ...capHistoryByBudget(toAgentMessages(history)),
+      ...(partialReply
+        ? [{ role: "assistant" as const, content: partialReply }]
+        : []),
+      {
+        role: "user",
+        content: `[system] Your pending \`${action.toolName}\` action was approved and executed. Result: ${resultJson}\nReport the outcome in the conversation and finish helping with the original request.`,
+      },
+    ];
+
     const { text, usage } = await generateAgentResponse({
       tier: ctx.config.modelTier,
-      system: buildRunSystemPrompt(ctx),
-      prompt: `Approved tool ${action.toolName}. Result: ${JSON.stringify(execResult.result ?? execResult)}. Continue helping with: ${input.message}`,
+      system: `${buildRunSystemPrompt(ctx)}${formatMemoriesForPrompt(memories)}`,
+      messages,
       runId,
     });
     rl.info("resume response generated", { responseLength: text.length, ...usage });
+
+    await db.insert(kasieInteractions).values({
+      runId,
+      role: "assistant",
+      content: text,
+      metadata: { usage, resumedFromActionId: actionId },
+    });
 
     await updateRunStatus(runId, "completed", { text, usage });
     await recordUsageSafe(ctx, usage);

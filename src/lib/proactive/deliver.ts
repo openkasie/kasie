@@ -6,12 +6,10 @@ import {
 } from "@/lib/db/queries/projects";
 import { createLogger } from "@/lib/log";
 import { openSlackDm, postSlackMessage } from "@/lib/slack/message";
+import { NOTHING_TO_REPORT } from "./constants";
 import { isWithinWorkingHours } from "./gates";
 
 const log = createLogger("proactive:deliver");
-
-/** Exact reply that tells delivery to stay silent instead of posting filler. */
-export const NOTHING_TO_REPORT = "NOTHING_TO_REPORT";
 
 export type ProactiveDelivery = {
   projectId: string;

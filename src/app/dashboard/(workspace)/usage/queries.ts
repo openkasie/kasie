@@ -10,6 +10,7 @@ import {
   listProjectsForUser,
 } from "@/lib/db/queries/orgs";
 import { getOrgMembership } from "@/lib/db/queries/orgs";
+import { getInitiativeUsageSummary } from "@/lib/db/queries/usage";
 import { getProjectById } from "@/lib/db/queries/projects";
 import { requireActiveProject } from "@/lib/auth/session";
 import type { AuditEventCategory } from "@/lib/db/schema";
@@ -123,6 +124,9 @@ export const getUsageTasksData = cache(async (searchParams: UsageSearchParams = 
   const ctx = await getUsageContext(searchParams);
   if (!ctx) return null;
 
-  const schedules = await getScheduleUsageStats(ctx.orgId, ctx.since);
-  return { ...ctx, schedules };
+  const [schedules, initiative] = await Promise.all([
+    getScheduleUsageStats(ctx.orgId, ctx.since),
+    getInitiativeUsageSummary(ctx.orgId, ctx.since),
+  ]);
+  return { ...ctx, schedules, initiative };
 });

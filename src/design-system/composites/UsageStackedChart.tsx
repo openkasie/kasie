@@ -5,6 +5,7 @@ export type DailySourceUsage = {
   slack: number;
   api: number;
   schedule: number;
+  initiative: number;
   other: number;
 };
 
@@ -17,14 +18,16 @@ const SERIES = [
   { key: "slack" as const, label: "Slack", className: "fill-[#6366f1]" },
   { key: "api" as const, label: "Agent API", className: "fill-[#818cf8]" },
   { key: "schedule" as const, label: "Scheduled", className: "fill-[#a5b4fc]" },
+  { key: "initiative" as const, label: "Initiative", className: "fill-[#c7d2fe]" },
   { key: "other" as const, label: "Other", className: "fill-[var(--fg-muted)] opacity-60" },
 ];
 
+function dayTotal(day: DailySourceUsage): number {
+  return day.slack + day.api + day.schedule + day.initiative + day.other;
+}
+
 export function UsageStackedChart({ data, className }: UsageStackedChartProps) {
-  const max = Math.max(
-    ...data.map((d) => d.slack + d.api + d.schedule + d.other),
-    1,
-  );
+  const max = Math.max(...data.map(dayTotal), 1);
   const barWidth = 100 / Math.max(data.length, 1);
 
   return (
@@ -35,12 +38,7 @@ export function UsageStackedChart({ data, className }: UsageStackedChartProps) {
           const pct =
             max > 0
               ? Math.round(
-                (total /
-                  data.reduce(
-                    (sum, day) => sum + day.slack + day.api + day.schedule + day.other,
-                    0,
-                  )) *
-                100,
+                (total / data.reduce((sum, day) => sum + dayTotal(day), 0)) * 100,
               ) || 0
               : 0;
           return (
@@ -62,7 +60,7 @@ export function UsageStackedChart({ data, className }: UsageStackedChartProps) {
         aria-label="Estimated spend by source over the selected range"
       >
         {data.map((day, i) => {
-          const total = day.slack + day.api + day.schedule + day.other;
+          const total = dayTotal(day);
           const x = i * barWidth + barWidth * 0.15;
           const w = barWidth * 0.7;
           let y = 40;

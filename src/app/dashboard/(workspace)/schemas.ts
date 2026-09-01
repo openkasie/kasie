@@ -59,4 +59,8 @@ export const ScheduleDeleteSchema = z.object({
   scheduleId: z.string().uuid(),
 });
 
+export const MemoryDeleteSchema = z.object({
+  memoryId: z.string().uuid(),
+});
+
 export type ConfigUpdate = z.infer<typeof ConfigUpdateSchema>;

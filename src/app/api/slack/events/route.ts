@@ -11,14 +11,20 @@ import { createRun, getRunByIdempotencyKey } from "@/lib/db/queries/runs";
 import { mcpGateway } from "@/lib/mcp/gateway";
 import { generateSlackCopy } from "@/lib/slack/copy";
 import {
+  addSlackReaction,
   completeSlackMessage,
+  deleteSlackMessage,
   getSlackUserName,
   postSlackApprovalRequest,
   postSlackMessage,
   removeSlackReaction,
   signalSlackProcessing,
   SLACK_PROCESSING_REACTION,
+  updateSlackMessage,
 } from "@/lib/slack/message";
+import { parseReactSentinel } from "@/lib/slack/react-sentinel";
+
+const TOOL_PROGRESS_DEBOUNCE_MS = 2000;
 
 const slackEventSchema = z.object({
   type: z.string(),
@@ -147,16 +153,47 @@ export async function POST(request: Request) {
         ackTs = await postSlackMessage(channel!, ackText, botToken!, threadTs!);
       }
 
-      await enqueueAndProcess(jobPayload);
+      // Live tool progress: edit the ack in place as tools start, at most
+      // one edit per debounce window. Best-effort; never blocks the run.
+      let lastProgressAt = 0;
+      const onToolStart = (toolName: string) => {
+        if (!ackTs || toolName === "remember") return;
+        const nowMs = Date.now();
+        if (nowMs - lastProgressAt < TOOL_PROGRESS_DEBOUNCE_MS) return;
+        lastProgressAt = nowMs;
+        void updateSlackMessage(
+          channel!,
+          ackTs,
+          `Checking \`${toolName}\`...`,
+          botToken!,
+        ).catch(() => {});
+      };
+
+      await enqueueAndProcess(jobPayload, { onToolStart });
       const completed = await import("@/lib/db/queries/runs").then((m) =>
         m.getRunById(project.id, run.id),
       );
       const output = completed?.output as {
         text?: string;
-        pendingActionId?: string;
-        pendingToolName?: string;
+        pendingActions?: { id: string; toolName: string }[];
       } | null;
       let text = output?.text?.trim();
+
+      // Reaction-only reply: acknowledge on the user's message instead of
+      // posting text into the thread.
+      const reaction = text ? parseReactSentinel(text) : null;
+      if (reaction) {
+        await addSlackReaction(channel!, messageTs!, reaction, botToken!);
+        if (ackTs) await deleteSlackMessage(channel!, ackTs, botToken!);
+        await removeSlackReaction(
+          channel!,
+          messageTs!,
+          SLACK_PROCESSING_REACTION,
+          botToken!,
+        );
+        return;
+      }
+
       if (!text) {
         text = await generateSlackCopy({
           projectId: project.id,
@@ -173,15 +210,17 @@ export async function POST(request: Request) {
         ackTs,
       });
 
-      if (completed?.status === "awaiting_approval" && output?.pendingActionId) {
-        await postSlackApprovalRequest({
-          channel: channel!,
-          botToken: botToken!,
-          toolName: output.pendingToolName ?? "pending action",
-          actionId: output.pendingActionId,
-          runId: run.id,
-          threadTs: threadTs!,
-        });
+      if (completed?.status === "awaiting_approval" && output?.pendingActions?.length) {
+        for (const pending of output.pendingActions) {
+          await postSlackApprovalRequest({
+            channel: channel!,
+            botToken: botToken!,
+            toolName: pending.toolName,
+            actionId: pending.id,
+            runId: run.id,
+            threadTs: threadTs!,
+          });
+        }
       }
     } catch (err) {
       console.error("slack after() run failed", err);

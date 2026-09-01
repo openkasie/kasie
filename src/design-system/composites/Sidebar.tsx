@@ -5,6 +5,7 @@ import { usePathname } from "next/navigation";
 import type { Icon } from "@phosphor-icons/react";
 import {
   ArrowLeftIcon,
+  BrainIcon,
   BuildingsIcon,
   CalendarCheckIcon,
   ChartBarIcon,
@@ -39,6 +40,7 @@ const PROJECT_NAV: Omit<NavItemConfig, "badge">[] = [
   { href: "/dashboard/skills", label: "Skills", icon: WrenchIcon },
   { href: "/dashboard/tasks", label: "Tasks", icon: CalendarCheckIcon },
   { href: "/dashboard/approvals", label: "Approvals", icon: ShieldCheckIcon },
+  { href: "/dashboard/memory", label: "Memory", icon: BrainIcon },
   { href: "/dashboard/runs", label: "Runs", icon: PlayIcon },
   { href: "/dashboard/team", label: "Team", icon: UsersIcon },
   { href: "/dashboard/usage", label: "Usage", icon: ChartBarIcon },

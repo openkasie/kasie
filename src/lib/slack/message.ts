@@ -46,6 +46,7 @@ type SlackUserResponse = SlackApiResponse & {
   user?: {
     name?: string;
     real_name?: string;
+    tz?: string;
     profile?: { display_name?: string; real_name?: string };
   };
 };
@@ -76,6 +77,25 @@ export async function getSlackUserName(
     payload.user.name ||
     null
   );
+}
+
+/** IANA timezone of a Slack user, e.g. "America/New_York". */
+export async function getSlackUserTimezone(
+  slackUserId: string,
+  botToken: string,
+): Promise<string | null> {
+  if (!botToken) return null;
+
+  const res = await fetch(
+    `https://slack.com/api/users.info?user=${encodeURIComponent(slackUserId)}`,
+    {
+      headers: { Authorization: `Bearer ${botToken}` },
+      cache: "no-store",
+    },
+  );
+  const payload = (await res.json()) as SlackUserResponse;
+  if (!payload.ok || !payload.user?.tz) return null;
+  return payload.user.tz;
 }
 
 export async function openSlackDm(
@@ -168,12 +188,16 @@ export async function postSlackApprovalRequest(input: {
   return payload.ts;
 }
 
-/** Edit an existing message in place; returns false when the update failed. */
+/**
+ * Edit an existing message in place; returns false when the update failed.
+ * Pass `blocks: []` to strip Block Kit content (e.g. retire approval buttons).
+ */
 export async function updateSlackMessage(
   channel: string,
   ts: string,
   text: string,
   botToken: string,
+  opts?: { blocks?: unknown[] },
 ): Promise<boolean> {
   if (!botToken) return false;
 
@@ -181,6 +205,7 @@ export async function updateSlackMessage(
     channel,
     ts,
     text: normalizeSlackMrkdwn(text),
+    ...(opts?.blocks ? { blocks: opts.blocks } : {}),
   });
   if (!payload.ok) {
     console.error("slack chat.update failed", payload.error);
@@ -189,7 +214,26 @@ export async function updateSlackMessage(
   return true;
 }
 
-async function addSlackReaction(
+/** Remove a message entirely, e.g. an ack that a reaction-only reply supersedes. */
+export async function deleteSlackMessage(
+  channel: string,
+  ts: string,
+  botToken: string,
+): Promise<boolean> {
+  if (!botToken) return false;
+
+  const payload = await slackApi<SlackApiResponse>("chat.delete", botToken, {
+    channel,
+    ts,
+  });
+  if (!payload.ok) {
+    console.error("slack chat.delete failed", payload.error);
+    return false;
+  }
+  return true;
+}
+
+export async function addSlackReaction(
   channel: string,
   timestamp: string,
   name: string,

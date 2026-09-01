@@ -15,10 +15,20 @@ export type RunInput = {
   metadata?: Record<string, unknown>;
 };
 
+export type PendingActionRef = { id: string; toolName: string };
+
+/**
+ * In-memory run event listeners. Never serialized into queue payloads;
+ * worker-dequeued jobs simply run without hooks.
+ */
+export type RunHooks = {
+  onToolStart?: (toolName: string) => void;
+};
+
 export type RunResult = {
   text: string;
   usage?: { inputTokens: number; outputTokens: number };
-  pendingActionId?: string;
+  pendingActions?: PendingActionRef[];
 };
 
 export type RunContext = {

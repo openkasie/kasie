@@ -11,14 +11,20 @@ import {
   TableRow,
 } from "@/design-system";
 import { CalendarBlankIcon } from "@phosphor-icons/react/dist/ssr";
-import type { ScheduleUsageRow } from "@/lib/db/queries/usage";
+import type {
+  InitiativeUsageSummary,
+  ScheduleUsageRow,
+} from "@/lib/db/queries/usage";
 
 type UsageTasksTableProps = {
   schedules: ScheduleUsageRow[];
+  initiative?: InitiativeUsageSummary;
 };
 
-export function UsageTasksTable({ schedules }: UsageTasksTableProps) {
-  if (schedules.length === 0) {
+export function UsageTasksTable({ schedules, initiative }: UsageTasksTableProps) {
+  const hasInitiative = (initiative?.runCount ?? 0) > 0;
+
+  if (schedules.length === 0 && !hasInitiative) {
     return (
       <EmptyState
         icon={<CalendarBlankIcon size={32} weight="regular" />}
@@ -39,6 +45,26 @@ export function UsageTasksTable({ schedules }: UsageTasksTableProps) {
         <TableHeaderCell>Status</TableHeaderCell>
       </TableHead>
       <TableBody>
+        {hasInitiative && initiative ? (
+          <TableRow>
+            <TableCell>
+              <p className="font-medium">Self-directed initiative</p>
+            </TableCell>
+            <TableCell className="text-[var(--fg-muted)]">When idle</TableCell>
+            <TableCell>{initiative.runCount}</TableCell>
+            <TableCell align="right" className="font-mono tabular-nums">
+              {formatUsdFromMicros(initiative.avgCostMicros)}
+            </TableCell>
+            <TableCell className="text-[var(--fg-muted)]">
+              {initiative.lastActivity
+                ? formatRelativeTime(initiative.lastActivity)
+                : "—"}
+            </TableCell>
+            <TableCell>
+              <Chip variant="success">Active</Chip>
+            </TableCell>
+          </TableRow>
+        ) : null}
         {schedules.map((schedule) => (
           <TableRow key={schedule.scheduleId}>
             <TableCell>

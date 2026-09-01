@@ -164,6 +164,9 @@ export async function getMemberUsageStats(orgId: string, since: Date): Promise<M
     } else if (row.source === "schedule") {
       key = "source:schedule";
       label = "Scheduled tasks";
+    } else if (row.source === "initiative") {
+      key = "source:initiative";
+      label = "Initiative";
     } else if (row.source === "system") {
       key = "source:system";
       label = "System";
@@ -244,6 +247,7 @@ export type DailySourceUsage = {
   slack: number;
   api: number;
   schedule: number;
+  initiative: number;
   other: number;
 };
 
@@ -280,7 +284,14 @@ export async function getUsageStats(orgId: string, days = 30) {
     const d = new Date(since);
     d.setUTCDate(since.getUTCDate() + i);
     const key = d.toISOString().slice(0, 10);
-    dailyMap.set(key, { date: key, slack: 0, api: 0, schedule: 0, other: 0 });
+    dailyMap.set(key, {
+      date: key,
+      slack: 0,
+      api: 0,
+      schedule: 0,
+      initiative: 0,
+      other: 0,
+    });
   }
 
   let totalSpendMicros = 0;
@@ -293,13 +304,14 @@ export async function getUsageStats(orgId: string, days = 30) {
     if (entry.source === "slack") day.slack += entry.estimatedCostMicros;
     else if (entry.source === "api") day.api += entry.estimatedCostMicros;
     else if (entry.source === "schedule") day.schedule += entry.estimatedCostMicros;
+    else if (entry.source === "initiative") day.initiative += entry.estimatedCostMicros;
     else day.other += entry.estimatedCostMicros;
   }
 
   const dailySourceData = [...dailyMap.values()];
   const dailyData = dailySourceData.map((d) => ({
     date: d.date,
-    amount: d.slack + d.api + d.schedule + d.other,
+    amount: d.slack + d.api + d.schedule + d.initiative + d.other,
   }));
 
   const monthStart = utcMonthStart();
@@ -411,6 +423,48 @@ export async function getScheduleUsageStats(
       lastActivity: usage?.lastActivity ?? null,
     };
   }).sort((a, b) => b.totalCostMicros - a.totalCostMicros);
+}
+
+export type InitiativeUsageSummary = {
+  runCount: number;
+  totalCostMicros: number;
+  avgCostMicros: number;
+  lastActivity: Date | null;
+};
+
+/** Spend on self-directed initiative runs across the org. */
+export async function getInitiativeUsageSummary(
+  orgId: string,
+  since: Date,
+): Promise<InitiativeUsageSummary> {
+  const rows = await db
+    .select({
+      costMicros: kasieUsageLedger.estimatedCostMicros,
+      createdAt: kasieUsageLedger.createdAt,
+    })
+    .from(kasieUsageLedger)
+    .innerJoin(kasieRuns, eq(kasieRuns.id, kasieUsageLedger.runId))
+    .where(
+      and(
+        eq(kasieUsageLedger.orgId, orgId),
+        eq(kasieRuns.source, "initiative"),
+        gte(kasieUsageLedger.createdAt, since),
+      ),
+    );
+
+  let totalCostMicros = 0;
+  let lastActivity: Date | null = null;
+  for (const row of rows) {
+    totalCostMicros += row.costMicros;
+    if (!lastActivity || row.createdAt > lastActivity) lastActivity = row.createdAt;
+  }
+
+  return {
+    runCount: rows.length,
+    totalCostMicros,
+    avgCostMicros: rows.length > 0 ? Math.round(totalCostMicros / rows.length) : 0,
+    lastActivity,
+  };
 }
 
 export async function getTeamUsageSummary(orgId: string, since: Date) {

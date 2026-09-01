@@ -20,6 +20,7 @@ import {
   exchangeSlackOAuthCode,
   readSlackOAuthState,
 } from "@/lib/slack/oauth";
+import { adoptInstallerTimezone } from "@/lib/slack/timezone";
 import { sendOperatorWelcome } from "@/lib/slack/welcome";
 import { handleSlackSignInCallback } from "@/lib/slack/signin-callback";
 
@@ -77,6 +78,12 @@ export async function GET(request: Request) {
         botToken: exchanged.botToken,
       });
 
+      await adoptInstallerTimezone(
+        project.id,
+        exchanged.authedUserId,
+        exchanged.botToken,
+      );
+
       await sendOperatorWelcome({
         userId: session.user.id,
         projectId: project.id,
@@ -118,6 +125,11 @@ export async function GET(request: Request) {
       exchanged.botToken,
     );
     await setPrimaryChannel(botState.projectId, "slack");
+    await adoptInstallerTimezone(
+      botState.projectId,
+      exchanged.authedUserId,
+      exchanged.botToken,
+    );
     await setUserSelectedProject(session.user.id, botState.projectId);
 
     return NextResponse.redirect(

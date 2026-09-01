@@ -83,6 +83,7 @@ export async function generateAgentResponseWithTools(input: {
   tools?: ToolSet;
   maxOutputTokens?: number;
   runId?: string;
+  onToolStart?: (toolName: string) => void;
 } & PromptInput) {
   const ll = input.runId ? log.child({ runId: input.runId, tier: input.tier }) : log.child({ tier: input.tier });
   const messages = toMessages(input);
@@ -117,6 +118,11 @@ export async function generateAgentResponseWithTools(input: {
           {
             ...tool,
             execute: async (args: unknown, opts: unknown) => {
+              try {
+                input.onToolStart?.(name);
+              } catch {
+                // Progress hooks are best-effort; never fail the run.
+              }
               const { classifyTool } = await import("@/lib/mcp/classify-tool");
               if (classifyTool(name) === "write") {
                 ll.info("write tool intercepted", { toolName: name });

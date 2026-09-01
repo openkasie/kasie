@@ -49,6 +49,7 @@ const COWORKER_RULES = [
   '- No boilerplate sign-offs ("Let me know if you need anything else!"), no greetings on every message.',
   "- Refer to prior messages in the conversation naturally; don't re-explain things already discussed.",
   "- When you commit to doing something, be specific about what and when.",
+  '- When a reaction is the natural reply (thanks, acknowledgments, a simple yes), respond with exactly `REACT:<emoji_name>` and nothing else, e.g. `REACT:thumbsup`. Use a real Slack emoji name.',
 ].join("\n");
 
 function buildSkillPromptSection(enabledSkillIds: string[]): string {

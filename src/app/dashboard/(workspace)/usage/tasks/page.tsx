@@ -11,5 +11,5 @@ export default async function UsageTasksPage({
   const data = await getUsageTasksData(params);
   if (!data) notFound();
 
-  return <UsageTasksTable schedules={data.schedules} />;
+  return <UsageTasksTable schedules={data.schedules} initiative={data.initiative} />;
 }

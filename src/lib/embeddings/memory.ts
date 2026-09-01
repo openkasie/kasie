@@ -29,6 +29,12 @@ async function createEmbedding(text: string): Promise<number[]> {
   return embedding;
 }
 
+/** Topic-pass matches farther than this are noise, not context. */
+export const MEMORY_RELEVANCE_MAX_DISTANCE = 0.6;
+
+/** Same entity+relation with a target this close is the same fact restated. */
+export const MEMORY_DEDUP_MAX_DISTANCE = 0.15;
+
 export async function storeMemoryTriple(input: {
   projectId: string;
   entity: string;
@@ -37,6 +43,33 @@ export async function storeMemoryTriple(input: {
 }) {
   const text = `${input.entity} ${input.relation} ${input.target}`;
   const embedding = await createEmbedding(text);
+  const vectorStr = `[${embedding.join(",")}]`;
+
+  // Near-identical restatements of the same entity+relation refresh the
+  // existing fact instead of piling up duplicates.
+  const [nearest] = await db
+    .select({
+      id: kasieMemories.id,
+      distance: sql<number>`${kasieMemories.embedding} <=> ${vectorStr}::vector`,
+    })
+    .from(kasieMemories)
+    .where(
+      and(
+        eq(kasieMemories.projectId, input.projectId),
+        eq(kasieMemories.entity, input.entity),
+        eq(kasieMemories.relation, input.relation),
+      ),
+    )
+    .orderBy(sql`${kasieMemories.embedding} <=> ${vectorStr}::vector`)
+    .limit(1);
+
+  if (nearest && nearest.distance <= MEMORY_DEDUP_MAX_DISTANCE) {
+    await db
+      .update(kasieMemories)
+      .set({ target: input.target, embedding, timestamp: new Date() })
+      .where(eq(kasieMemories.id, nearest.id));
+    return;
+  }
 
   await db.insert(kasieMemories).values({
     projectId: input.projectId,
@@ -69,11 +102,19 @@ export async function retrieveMemories(
   const vectorStr = `[${embedding.join(",")}]`;
 
   const topicPass = db
-    .select(TRIPLE_COLUMNS)
+    .select({
+      ...TRIPLE_COLUMNS,
+      distance: sql<number>`${kasieMemories.embedding} <=> ${vectorStr}::vector`,
+    })
     .from(kasieMemories)
     .where(eq(kasieMemories.projectId, projectId))
     .orderBy(sql`${kasieMemories.embedding} <=> ${vectorStr}::vector`)
-    .limit(limit);
+    .limit(limit)
+    .then((rows) =>
+      rows
+        .filter((r) => r.distance <= MEMORY_RELEVANCE_MAX_DISTANCE)
+        .map(({ entity, relation, target }) => ({ entity, relation, target })),
+    );
 
   const nameFragment = opts.speakerName?.trim().split(/\s+/)[0]?.toLowerCase();
   const speakerPass = nameFragment
@@ -101,6 +142,25 @@ export async function retrieveMemories(
     merged.push(m);
   }
   return merged;
+}
+
+/** Similarity search with row ids for the dashboard memory browser. */
+export async function searchMemories(projectId: string, query: string, limit = 25) {
+  const embedding = await createEmbedding(query);
+  const vectorStr = `[${embedding.join(",")}]`;
+
+  return db
+    .select({
+      id: kasieMemories.id,
+      entity: kasieMemories.entity,
+      relation: kasieMemories.relation,
+      target: kasieMemories.target,
+      timestamp: kasieMemories.timestamp,
+    })
+    .from(kasieMemories)
+    .where(eq(kasieMemories.projectId, projectId))
+    .orderBy(sql`${kasieMemories.embedding} <=> ${vectorStr}::vector`)
+    .limit(limit);
 }
 
 export function formatMemoriesForPrompt(

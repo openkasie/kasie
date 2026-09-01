@@ -12,6 +12,7 @@ const ACTION_CATEGORY: Record<AuditAction, AuditEventCategory> = {
   [AuditActions.workspaceUpdated]: "admin",
   [AuditActions.skillToggled]: "admin",
   [AuditActions.approvalResolved]: "approval",
+  [AuditActions.memoryDeleted]: "admin",
   [AuditActions.scheduleToggled]: "schedule",
   [AuditActions.scheduleCreated]: "schedule",
   [AuditActions.scheduleUpdated]: "schedule",

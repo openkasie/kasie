@@ -8,6 +8,7 @@ export const AuditActions = {
   workspaceUpdated: "workspace.updated",
   skillToggled: "skill.toggled",
   approvalResolved: "approval.resolved",
+  memoryDeleted: "memory.deleted",
   scheduleToggled: "schedule.toggled",
   scheduleCreated: "schedule.created",
   scheduleUpdated: "schedule.updated",
