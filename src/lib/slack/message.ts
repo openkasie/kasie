@@ -42,6 +42,42 @@ async function slackApi<T extends SlackApiResponse>(
   return (await res.json()) as T;
 }
 
+type SlackUserResponse = SlackApiResponse & {
+  user?: {
+    name?: string;
+    real_name?: string;
+    profile?: { display_name?: string; real_name?: string };
+  };
+};
+
+/** Resolve a Slack user id to a human-readable name (display name preferred). */
+export async function getSlackUserName(
+  slackUserId: string,
+  botToken: string,
+): Promise<string | null> {
+  if (!botToken) return null;
+
+  const res = await fetch(
+    `https://slack.com/api/users.info?user=${encodeURIComponent(slackUserId)}`,
+    {
+      headers: { Authorization: `Bearer ${botToken}` },
+      cache: "no-store",
+    },
+  );
+  const payload = (await res.json()) as SlackUserResponse;
+  if (!payload.ok || !payload.user) {
+    console.error("slack users.info failed", payload.error);
+    return null;
+  }
+  return (
+    payload.user.profile?.display_name ||
+    payload.user.profile?.real_name ||
+    payload.user.real_name ||
+    payload.user.name ||
+    null
+  );
+}
+
 export async function openSlackDm(
   slackUserId: string,
   botToken: string,
@@ -75,6 +111,82 @@ export async function postSlackMessage(
     return;
   }
   return payload.ts;
+}
+
+/**
+ * Post an approve/reject prompt for a pending action. Button values use the
+ * `verb:actionId:runId` format the interactions route expects.
+ */
+export async function postSlackApprovalRequest(input: {
+  channel: string;
+  botToken: string;
+  toolName: string;
+  actionId: string;
+  runId: string;
+  threadTs?: string;
+}): Promise<string | undefined> {
+  if (!input.botToken) return;
+
+  const fallback = `Approval needed: ${input.toolName}`;
+  const payload = await slackApi<SlackApiResponse>("chat.postMessage", input.botToken, {
+    channel: input.channel,
+    text: fallback,
+    ...(input.threadTs ? { thread_ts: input.threadTs } : {}),
+    blocks: [
+      {
+        type: "section",
+        text: {
+          type: "mrkdwn",
+          text: `This one needs your sign-off before I run it: \`${input.toolName}\``,
+        },
+      },
+      {
+        type: "actions",
+        elements: [
+          {
+            type: "button",
+            style: "primary",
+            text: { type: "plain_text", text: "Approve" },
+            action_id: "approve_action",
+            value: `approve:${input.actionId}:${input.runId}`,
+          },
+          {
+            type: "button",
+            style: "danger",
+            text: { type: "plain_text", text: "Reject" },
+            action_id: "reject_action",
+            value: `reject:${input.actionId}:${input.runId}`,
+          },
+        ],
+      },
+    ],
+  });
+  if (!payload.ok) {
+    console.error("slack approval request failed", payload.error);
+    return;
+  }
+  return payload.ts;
+}
+
+/** Edit an existing message in place; returns false when the update failed. */
+export async function updateSlackMessage(
+  channel: string,
+  ts: string,
+  text: string,
+  botToken: string,
+): Promise<boolean> {
+  if (!botToken) return false;
+
+  const payload = await slackApi<SlackApiResponse>("chat.update", botToken, {
+    channel,
+    ts,
+    text: normalizeSlackMrkdwn(text),
+  });
+  if (!payload.ok) {
+    console.error("slack chat.update failed", payload.error);
+    return false;
+  }
+  return true;
 }
 
 async function addSlackReaction(
@@ -132,8 +244,15 @@ export async function completeSlackMessage(input: {
   threadTs: string;
   botToken: string;
   text: string;
+  /** When set, the ack message is edited into the final answer instead of posting a second reply. */
+  ackTs?: string;
 }) {
-  await postSlackMessage(input.channel, input.text, input.botToken, input.threadTs);
+  const updated = input.ackTs
+    ? await updateSlackMessage(input.channel, input.ackTs, input.text, input.botToken)
+    : false;
+  if (!updated) {
+    await postSlackMessage(input.channel, input.text, input.botToken, input.threadTs);
+  }
   await removeSlackReaction(
     input.channel,
     input.messageTs,

@@ -1,7 +1,12 @@
 import { getOrgOwnerUserId, getSlackUserIdForUser } from "@/lib/db/queries/orgs";
-import { getProjectById, getSlackBotToken } from "@/lib/db/queries/projects";
+import {
+  getProjectById,
+  getProjectWithConfig,
+  getSlackBotToken,
+} from "@/lib/db/queries/projects";
 import { createLogger } from "@/lib/log";
 import { openSlackDm, postSlackMessage } from "@/lib/slack/message";
+import { isWithinWorkingHours } from "./gates";
 
 const log = createLogger("proactive:deliver");
 
@@ -45,6 +50,23 @@ export async function deliverProactiveOutput(input: ProactiveDelivery) {
       reason: text ? "nothing_to_report" : "empty_output",
     });
     return;
+  }
+
+  // Initiative messages respect quiet hours; schedules fire at times the
+  // operator chose explicitly, so they deliver as configured.
+  if (input.source === "initiative") {
+    const config = (await getProjectWithConfig(input.projectId))?.config;
+    if (
+      config &&
+      !isWithinWorkingHours(new Date(), config.timezone, config.workingHours ?? undefined)
+    ) {
+      log.info("delivery skipped", {
+        projectId: input.projectId,
+        source: input.source,
+        reason: "outside_working_hours",
+      });
+      return;
+    }
   }
 
   const botToken = await getSlackBotToken(input.projectId);

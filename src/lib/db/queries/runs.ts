@@ -1,11 +1,28 @@
-import { and, eq, getTableColumns } from "drizzle-orm";
+import { and, desc, eq, getTableColumns } from "drizzle-orm";
 import { db } from "../client";
 import {
+  kasieInteractions,
   kasiePendingActions,
   kasieProjects,
   kasieRuns,
   type RunSource,
 } from "../schema";
+
+/** Prior user/assistant turns for a thread, oldest first. */
+export async function getThreadInteractionHistory(threadId: string, limit = 20) {
+  const rows = await db
+    .select({
+      role: kasieInteractions.role,
+      content: kasieInteractions.content,
+      metadata: kasieInteractions.metadata,
+    })
+    .from(kasieInteractions)
+    .innerJoin(kasieRuns, eq(kasieInteractions.runId, kasieRuns.id))
+    .where(eq(kasieRuns.threadId, threadId))
+    .orderBy(desc(kasieInteractions.createdAt))
+    .limit(limit);
+  return rows.reverse();
+}
 
 export async function getRunById(projectId: string, runId: string) {
   const [run] = await db

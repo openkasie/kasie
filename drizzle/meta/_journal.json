@@ -22,6 +22,13 @@
       "when": 1787850721693,
       "tag": "0002_unusual_starhawk",
       "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1788245432536,
+      "tag": "0003_orange_weapon_omega",
+      "breakpoints": true
     }
   ]
 }

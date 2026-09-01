@@ -260,6 +260,17 @@ export async function countEnabledSchedules(projectId: string) {
   return row?.total ?? 0;
 }
 
+export async function getThreadById(projectId: string, threadId: string) {
+  const [thread] = await db
+    .select()
+    .from(kasieThreads)
+    .where(
+      and(eq(kasieThreads.projectId, projectId), eq(kasieThreads.id, threadId)),
+    )
+    .limit(1);
+  return thread ?? null;
+}
+
 export async function upsertThread(
   projectId: string,
   externalThreadKey: string,

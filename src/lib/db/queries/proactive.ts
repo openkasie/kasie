@@ -18,6 +18,8 @@ export async function listProactiveCandidateProjects() {
       agentName: kasieProjects.agentName,
       createdAt: kasieProjects.createdAt,
       proactiveEnabled: kasieProjectConfig.proactiveEnabled,
+      timezone: kasieProjectConfig.timezone,
+      workingHours: kasieProjectConfig.workingHours,
     })
     .from(kasieProjects)
     .innerJoin(

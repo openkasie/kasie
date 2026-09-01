@@ -1,15 +1,17 @@
+import { buildRememberTool } from "@/lib/agents/memory-tool";
 import { buildRunSystemPrompt } from "@/lib/agents/system-prompt";
 import {
   generateAgentResponse,
   generateAgentResponseWithTools,
 } from "@/lib/ai/provider";
 import type { ToolSet } from "ai";
-import type { RunContext, RunInput, RunResult } from "@/lib/ai/types";
+import type { AgentMessage, RunContext, RunInput, RunResult } from "@/lib/ai/types";
 import { getProjectWithConfig } from "@/lib/db/queries/projects";
 import {
   createPendingAction,
   getPendingAction,
   getRunById,
+  getThreadInteractionHistory,
   updateRunStatus,
 } from "@/lib/db/queries/runs";
 import { recordRunUsage } from "@/lib/usage/meter";
@@ -66,6 +68,9 @@ class KasieOrchestrator {
     rl.info("run started", { messageLength: input.message.length });
     await updateRunStatus(ctx.runId, "running");
 
+    const history = await getThreadInteractionHistory(ctx.threadId);
+    rl.debug("thread history loaded", { count: history.length });
+
     await db.insert(kasieInteractions).values({
       runId: ctx.runId,
       role: "user",
@@ -73,9 +78,35 @@ class KasieOrchestrator {
       metadata: input.metadata ?? {},
     });
 
-    const memories = await retrieveMemories(ctx.projectId, input.message);
+    const speakerName =
+      typeof input.metadata?.userName === "string" ? input.metadata.userName : undefined;
+
+    const memories = await retrieveMemories(ctx.projectId, input.message, {
+      speakerName,
+    });
     rl.debug("memories retrieved", { count: memories.length });
     const memoryContext = formatMemoriesForPrompt(memories);
+
+    // Prefix user turns with the speaker's name so multi-person threads and
+    // person-keyed memory stay attributable.
+    const attributed = (content: string, name?: string) =>
+      name ? `${name}: ${content}` : content;
+
+    const messages: AgentMessage[] = [
+      ...history
+        .filter((h) => h.role === "user" || h.role === "assistant")
+        .map((h) => ({
+          role: h.role as "user" | "assistant",
+          content:
+            h.role === "user"
+              ? attributed(
+                  h.content,
+                  typeof h.metadata?.userName === "string" ? h.metadata.userName : undefined,
+                )
+              : h.content,
+        })),
+      { role: "user", content: attributed(input.message, speakerName) },
+    ];
 
     const userId =
       typeof input.metadata?.userId === "string" ? input.metadata.userId : undefined;
@@ -93,66 +124,62 @@ class KasieOrchestrator {
       });
       const toolHint =
         descriptors.length > 0
-          ? `\nAvailable integrations: ${descriptors.map((t) => t.name).join(", ")}`
+          ? `\n\nAvailable integrations: ${descriptors.map((t) => t.name).join(", ")}`
           : "";
+      const memoryHint =
+        "\n\nMemory: use the `remember` tool to store durable facts (ownership, preferences, decisions, deadlines). Check the team memory above before re-asking or repeating a suggestion.";
+      const channelType =
+        typeof input.metadata?.channelType === "string"
+          ? input.metadata.channelType
+          : undefined;
+      const settingHint =
+        channelType === "im" || channelType === "mpim"
+          ? "\n\nSetting: direct message. One-on-one register; looser and more personal, never broadcast-formal."
+          : channelType
+            ? "\n\nSetting: shared channel. Others are reading; keep replies tight, skimmable, and worth the channel's attention."
+            : "";
+      const system = `${buildRunSystemPrompt(ctx)}${memoryContext}${toolHint}${memoryHint}${settingHint}`;
 
-      if (Object.keys(aiTools).length > 0) {
-        rl.debug("generating response with tools");
-        const result = await generateAgentResponseWithTools({
-          tier: ctx.config.modelTier,
-          system: buildRunSystemPrompt(ctx),
-          prompt: `${input.message}${memoryContext}${toolHint}`,
-          tools: aiTools as ToolSet,
-          runId: ctx.runId,
-        });
-        text = result.text;
-        usage = result.usage;
-        rl.info("llm response with tools", {
-          responseLength: text.length,
-          ...usage,
-          toolCallCount: result.toolCalls.length,
-        });
+      const tools: ToolSet = {
+        ...(aiTools as ToolSet),
+        remember: buildRememberTool(ctx.projectId),
+      };
 
-        if (result.toolCalls.length > 0) {
-          const write = result.toolCalls[0];
-          rl.info("write tool blocked for approval", {
-            toolName: write.toolName,
-          });
-          const action = await createPendingAction({
-            runId: ctx.runId,
-            toolName: write.toolName,
-            payload: write.args,
-          });
-          await updateRunStatus(ctx.runId, "awaiting_approval", { text });
-          await recordUsageSafe(ctx, usage);
-          return { text, usage, pendingActionId: action.id };
-        }
-      } else {
-        rl.debug("generating response without tools");
-        const result = await generateAgentResponse({
-          tier: ctx.config.modelTier,
-          system: buildRunSystemPrompt(ctx),
-          prompt: `${input.message}${memoryContext}${toolHint}`,
-          runId: ctx.runId,
+      const result = await generateAgentResponseWithTools({
+        tier: ctx.config.modelTier,
+        system,
+        messages,
+        tools,
+        runId: ctx.runId,
+      });
+      text = result.text;
+      usage = result.usage;
+      rl.info("llm response with tools", {
+        responseLength: text.length,
+        ...usage,
+        toolCallCount: result.toolCalls.length,
+      });
+
+      if (result.toolCalls.length > 0) {
+        const write = result.toolCalls[0];
+        rl.info("write tool blocked for approval", {
+          toolName: write.toolName,
         });
-        text = result.text;
-        usage = result.usage;
-        rl.info("llm response", { responseLength: text.length, ...usage });
+        const action = await createPendingAction({
+          runId: ctx.runId,
+          toolName: write.toolName,
+          payload: write.args,
+        });
+        await updateRunStatus(ctx.runId, "awaiting_approval", {
+          text,
+          pendingActionId: action.id,
+          pendingToolName: write.toolName,
+        });
+        await recordUsageSafe(ctx, usage);
+        return { text, usage, pendingActionId: action.id };
       }
     } finally {
       await gateway.close();
-    }
-
-    if (input.message.toLowerCase().includes("remember")) {
-      rl.info("memory store pending approval");
-      const action = await createPendingAction({
-        runId: ctx.runId,
-        toolName: "store_memory",
-        payload: { message: input.message },
-      });
-      await updateRunStatus(ctx.runId, "awaiting_approval", { text });
-      await recordUsageSafe(ctx, usage);
-      return { text, usage, pendingActionId: action.id };
     }
 
     await storeMemoryTriple({
@@ -210,6 +237,7 @@ class KasieOrchestrator {
         systemPrompt: projectData.project.systemPrompt,
         agentName: projectData.project.agentName,
         enabledSkillIds: projectData.config.enabledSkillIds ?? [],
+        timezone: projectData.config.timezone,
       },
     };
 
@@ -268,6 +296,7 @@ export async function buildRunContext(
       systemPrompt: data.project.systemPrompt,
       agentName: data.project.agentName,
       enabledSkillIds: data.config.enabledSkillIds ?? [],
+      timezone: data.config.timezone,
     },
   };
 }

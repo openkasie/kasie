@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { eq, sql } from "drizzle-orm";
+import { and, desc, eq, ilike, sql } from "drizzle-orm";
 import { embedText } from "@/lib/ai/compat";
 import { db } from "@/lib/db/client";
 import { kasieMemories } from "@/lib/db/schema";
@@ -47,22 +47,60 @@ export async function storeMemoryTriple(input: {
   });
 }
 
-export async function retrieveMemories(projectId: string, query: string, limit = 5) {
+export type MemoryTriple = { entity: string; relation: string; target: string };
+
+const TRIPLE_COLUMNS = {
+  entity: kasieMemories.entity,
+  relation: kasieMemories.relation,
+  target: kasieMemories.target,
+};
+
+/**
+ * Two-pass recall: topic similarity via pgvector, plus recent facts keyed to
+ * the current speaker (entity `person:<name>`), deduped.
+ */
+export async function retrieveMemories(
+  projectId: string,
+  query: string,
+  opts: { limit?: number; speakerName?: string } = {},
+): Promise<MemoryTriple[]> {
+  const limit = opts.limit ?? 5;
   const embedding = await createEmbedding(query);
   const vectorStr = `[${embedding.join(",")}]`;
 
-  const rows = await db
-    .select({
-      entity: kasieMemories.entity,
-      relation: kasieMemories.relation,
-      target: kasieMemories.target,
-    })
+  const topicPass = db
+    .select(TRIPLE_COLUMNS)
     .from(kasieMemories)
     .where(eq(kasieMemories.projectId, projectId))
     .orderBy(sql`${kasieMemories.embedding} <=> ${vectorStr}::vector`)
     .limit(limit);
 
-  return rows;
+  const nameFragment = opts.speakerName?.trim().split(/\s+/)[0]?.toLowerCase();
+  const speakerPass = nameFragment
+    ? db
+        .select(TRIPLE_COLUMNS)
+        .from(kasieMemories)
+        .where(
+          and(
+            eq(kasieMemories.projectId, projectId),
+            ilike(kasieMemories.entity, `person:%${nameFragment}%`),
+          ),
+        )
+        .orderBy(desc(kasieMemories.timestamp))
+        .limit(limit)
+    : Promise.resolve([] as MemoryTriple[]);
+
+  const [topical, speaker] = await Promise.all([topicPass, speakerPass]);
+
+  const seen = new Set<string>();
+  const merged: MemoryTriple[] = [];
+  for (const m of [...speaker, ...topical]) {
+    const key = `${m.entity}\u0000${m.relation}\u0000${m.target}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    merged.push(m);
+  }
+  return merged;
 }
 
 export function formatMemoriesForPrompt(

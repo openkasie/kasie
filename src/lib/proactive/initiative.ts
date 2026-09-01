@@ -101,6 +101,8 @@ export async function runInitiativeTick(opts: TickOptions = {}): Promise<number>
       const stats = await getInitiativeGateStats(project.projectId, now);
       const gate = evaluateInitiativeGate({
         proactiveEnabled: project.proactiveEnabled,
+        timezone: project.timezone,
+        workingHours: project.workingHours ?? null,
         projectCreatedAt: project.createdAt,
         ...stats,
         now,

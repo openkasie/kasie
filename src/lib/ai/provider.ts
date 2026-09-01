@@ -3,7 +3,7 @@ import { getLanguageModel as getCompatLanguageModel } from "@/lib/ai/compat";
 import { hasAiProvider } from "@/lib/env";
 import { createLogger } from "@/lib/log";
 import { resolveModelTier } from "./model-tiers";
-import type { ModelTier } from "./types";
+import type { AgentMessage, ModelTier } from "./types";
 
 const log = createLogger("ai-provider");
 
@@ -16,30 +16,48 @@ export async function getLanguageModel(tier: ModelTier) {
   return getCompatLanguageModel(model);
 }
 
+/** Either a single-shot prompt or a full conversation history. */
+type PromptInput = { prompt: string; messages?: never } | { prompt?: never; messages: AgentMessage[] };
+
+function toMessages(input: PromptInput): AgentMessage[] {
+  return input.messages ?? [{ role: "user", content: input.prompt }];
+}
+
+function lastUserContent(messages: AgentMessage[]): string {
+  for (let i = messages.length - 1; i >= 0; i--) {
+    if (messages[i].role === "user") return messages[i].content;
+  }
+  return "";
+}
+
+function totalLength(messages: AgentMessage[]): number {
+  return messages.reduce((sum, m) => sum + m.content.length, 0);
+}
+
 export async function generateAgentResponse(input: {
   tier: ModelTier;
   system: string;
-  prompt: string;
   maxOutputTokens?: number;
   runId?: string;
-}) {
+} & PromptInput) {
   const ll = input.runId ? log.child({ runId: input.runId, tier: input.tier }) : log.child({ tier: input.tier });
+  const messages = toMessages(input);
 
   if (!hasAiProvider()) {
     ll.warn("stub response (no AI provider configured)");
     return {
-      text: `[stub] ${input.prompt.slice(0, 200)}`,
+      text: `[stub] ${lastUserContent(messages).slice(0, 200)}`,
       usage: { inputTokens: 0, outputTokens: 0 },
     };
   }
 
   const { maxOutputTokens: tierMax, model } = await resolveModel(input.tier);
-  ll.debug("llm request", { model, promptLength: input.prompt.length });
+  ll.debug("llm request", { model, promptLength: totalLength(messages), messageCount: messages.length });
   const started = Date.now();
   const result = await generateText({
     model: await getLanguageModel(input.tier),
     system: input.system,
-    prompt: input.prompt,
+    messages,
     maxOutputTokens: input.maxOutputTokens ?? tierMax,
   });
   ll.info("llm response", {
@@ -62,17 +80,17 @@ export async function generateAgentResponse(input: {
 export async function generateAgentResponseWithTools(input: {
   tier: ModelTier;
   system: string;
-  prompt: string;
   tools?: ToolSet;
   maxOutputTokens?: number;
   runId?: string;
-}) {
+} & PromptInput) {
   const ll = input.runId ? log.child({ runId: input.runId, tier: input.tier }) : log.child({ tier: input.tier });
+  const messages = toMessages(input);
 
   if (!hasAiProvider()) {
     ll.warn("stub response with tools (no AI provider configured)");
     return {
-      text: `[stub] ${input.prompt.slice(0, 200)}`,
+      text: `[stub] ${lastUserContent(messages).slice(0, 200)}`,
       usage: { inputTokens: 0, outputTokens: 0 },
       toolCalls: [] as { toolName: string; args: Record<string, unknown> }[],
     };
@@ -80,7 +98,7 @@ export async function generateAgentResponseWithTools(input: {
 
   const { maxOutputTokens: tierMax, model } = await resolveModel(input.tier);
   const toolCount = input.tools ? Object.keys(input.tools).length : 0;
-  ll.debug("llm request with tools", { model, promptLength: input.prompt.length, toolCount });
+  ll.debug("llm request with tools", { model, promptLength: totalLength(messages), messageCount: messages.length, toolCount });
   const started = Date.now();
   const pendingWrites: { toolName: string; args: Record<string, unknown> }[] = [];
 
@@ -120,7 +138,7 @@ export async function generateAgentResponseWithTools(input: {
   const result = await generateText({
     model: await getLanguageModel(input.tier),
     system: input.system,
-    prompt: input.prompt,
+    messages,
     tools: wrappedTools,
     stopWhen: stepCountIs(5),
     maxOutputTokens: input.maxOutputTokens ?? tierMax,

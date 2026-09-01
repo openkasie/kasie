@@ -24,12 +24,12 @@ Honest caveat: with no AI gateway configured (`AI_GATEWAY_URL` and `AI_GATEWAY_A
 
 ## Retrieval: every run, automatically
 
-You never ask Kasie to check its memory; it always does. At the start of every run, the orchestrator (`src/lib/agents/orchestrator.ts`) calls `retrieveMemories(projectId, message)`, which embeds the incoming message and pulls the top 5 closest triples by cosine distance. `formatMemoriesForPrompt` injects them into the model prompt as:
+You never ask Kasie to check its memory; it always does. At the start of every run, the orchestrator (`src/lib/agents/orchestrator.ts`) calls `retrieveMemories(projectId, message, { speakerName })`, which runs two passes: it embeds the incoming message and pulls the top 5 closest triples by cosine distance, and when the speaker is known (Slack messages carry the resolved display name) it also pulls the most recent facts whose entity matches `person:<name>`. The two lists are deduped and `formatMemoriesForPrompt` injects them into the model prompt as:
 
 ```
 Relevant team memory:
+- person:dana prefers short bullet summaries
 - acme-api deployed_on vercel
-- Dana owns billing service
 ```
 
 The model sees these as context alongside the message. There is no keyword index and no manual lookup step. Retrieval is automatic rather than a tool the model chooses to invoke.
@@ -40,7 +40,7 @@ Three writers exist today:
 
 1. **Auto-store after conversations.** When a normal run completes, the orchestrator stores one triple: `conversation discussed <first 200 characters of the message>`. Cheap and lossy, but it gives future retrieval a trail of what came up.
 
-2. **Explicit "remember", with approval.** If a message contains the word "remember", the run pauses in status `awaiting_approval` and a `store_memory` pending action is created in `kasie_pending_actions`. A person approves or rejects it via the Slack buttons. This is HITL: human-in-the-loop, meaning a person confirms before the agent commits something to long-term memory. Honest note: the trigger is a literal keyword match on "remember", not intent detection, so phrasings without that word will not trigger it, and sentences that merely contain it will.
+2. **The `remember` tool.** The agent has a first-class tool for storing durable facts (ownership, preferences, decisions, deadlines) as triples, and its prompt tells it to use `person:<name>` entities for facts about people. The model decides when a fact is worth keeping; the write goes straight to `kasie_memories` without approval, since it is an internal database write with no external side effects.
 
 3. **Integration discovery.** When you connect an app, the discovery pass stores 5 to 12 triples about what it found (repos, monitors, projects; see [Integrations](12-integrations.md)). This is why Kasie knows your repo names right after you connect GitHub.
 

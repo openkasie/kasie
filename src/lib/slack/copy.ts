@@ -55,6 +55,7 @@ export async function generateSlackCopy(input: {
       personalityTone: data.config.personalityTone,
       workspaceInstructions: data.config.workspaceInstructions,
       enabledSkillIds: data.config.enabledSkillIds ?? [],
+      timezone: data.config.timezone,
     }),
     SLACK_WRITER_SUFFIX,
     integrationHint,

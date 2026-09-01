@@ -2,14 +2,32 @@ import { z } from "zod";
 
 const personalityTones = ["standard", "friendly", "concise", "formal"] as const;
 
+export const WorkingHoursSchema = z
+  .object({
+    startHour: z.number().int().min(0).max(23),
+    endHour: z.number().int().min(1).max(24),
+    days: z.array(z.number().int().min(0).max(6)).min(1).max(7),
+  })
+  .refine((h) => h.startHour < h.endHour, { message: "start must be before end" });
+
 export const ConfigUpdateSchema = z.object({
   personalityTone: z.enum(personalityTones).optional(),
   workspaceInstructions: z.string().max(4000).optional(),
   modelTier: z.enum(["ultra", "smart", "balanced"]).optional(),
+  proactiveEnabled: z.boolean().optional(),
+  timezone: z.string().trim().min(1).max(64).optional(),
+  workingHours: WorkingHoursSchema.nullable().optional(),
 });
 
 export const WorkspaceUpdateSchema = z.object({
   name: z.string().trim().min(1).max(80).optional(),
+  agentName: z.string().trim().min(1).max(80).optional(),
+  systemPrompt: z
+    .string()
+    .trim()
+    .max(4000)
+    .transform((v) => (v === "" ? null : v))
+    .nullish(),
 });
 
 export const SkillToggleSchema = z.object({

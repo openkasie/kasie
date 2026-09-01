@@ -1,5 +1,10 @@
 export type ModelTier = "ultra" | "smart" | "balanced";
 
+export type AgentMessage = {
+  role: "user" | "assistant";
+  content: string;
+};
+
 export type ModelConfig = {
   model: string;
   maxOutputTokens: number;
@@ -28,6 +33,7 @@ export type RunContext = {
     systemPrompt: string | null;
     agentName: string;
     enabledSkillIds: string[];
+    timezone: string;
   };
 };
 

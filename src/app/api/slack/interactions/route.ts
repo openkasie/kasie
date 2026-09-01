@@ -1,8 +1,17 @@
-import { NextResponse } from "next/server";
+import { after, NextResponse } from "next/server";
 import { z } from "zod";
 import { orchestrator } from "@/lib/agents/orchestrator";
-import { getProjectByTeamId } from "@/lib/db/queries/projects";
-import { getPendingAction, resolvePendingAction } from "@/lib/db/queries/runs";
+import {
+  getProjectByTeamId,
+  getSlackBotToken,
+  getThreadById,
+} from "@/lib/db/queries/projects";
+import {
+  getPendingAction,
+  getRunById,
+  resolvePendingAction,
+} from "@/lib/db/queries/runs";
+import { postSlackMessage } from "@/lib/slack/message";
 
 const interactionSchema = z.object({
   type: z.string(),
@@ -17,6 +26,16 @@ const interactionSchema = z.object({
     .optional(),
   user: z.object({ id: z.string(), name: z.string().optional() }).optional(),
 });
+
+/** Resolve the Slack channel + thread the pending action's run belongs to. */
+async function resolveRunThread(projectId: string, runId: string) {
+  const run = await getRunById(projectId, runId);
+  if (!run) return null;
+  const thread = await getThreadById(projectId, run.threadId);
+  if (!thread) return null;
+  const [channel, threadTs] = thread.externalThreadKey.split(":");
+  return channel && threadTs ? { channel, threadTs } : null;
+}
 
 export async function POST(request: Request) {
   const body = await request.text();
@@ -40,18 +59,46 @@ export async function POST(request: Request) {
 
   const [verb, actionId, runId] = action.value.split(":");
   const pending = await getPendingAction(project.id, actionId);
-  if (!pending) return NextResponse.json({ ok: true });
+  if (!pending || pending.status !== "pending") {
+    return NextResponse.json({ ok: true });
+  }
 
   const resolvedBy = payload.user?.name ?? payload.user?.id ?? "slack-user";
+  const approved = verb === "approve";
+  await resolvePendingAction(actionId, approved ? "approved" : "rejected", resolvedBy);
 
-  if (verb === "approve") {
-    await resolvePendingAction(actionId, "approved", resolvedBy);
-    if (runId && runId === pending.runId) {
-      await orchestrator.resumeAfterApproval(project.id, runId, actionId);
+  // Ack Slack within its 3s window; the resume itself can take a while.
+  after(async () => {
+    try {
+      const botToken = await getSlackBotToken(project.id);
+      const location = await resolveRunThread(project.id, pending.runId);
+
+      if (approved && runId === pending.runId) {
+        const result = await orchestrator.resumeAfterApproval(
+          project.id,
+          runId,
+          actionId,
+        );
+        if (botToken && location && result.text) {
+          await postSlackMessage(
+            location.channel,
+            result.text,
+            botToken,
+            location.threadTs,
+          );
+        }
+      } else if (!approved && botToken && location) {
+        await postSlackMessage(
+          location.channel,
+          `Got it, I won't run \`${pending.toolName}\`.`,
+          botToken,
+          location.threadTs,
+        );
+      }
+    } catch (err) {
+      console.error("slack interaction follow-up failed", err);
     }
-  } else {
-    await resolvePendingAction(actionId, "rejected", resolvedBy);
-  }
+  });
 
   return NextResponse.json({ ok: true });
 }

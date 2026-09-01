@@ -14,6 +14,9 @@ export default async function PreferencesSettingsPage() {
       instructions={data.config.workspaceInstructions ?? ""}
       modelTier={data.config.modelTier ?? "smart"}
       tierPresets={await buildModelTierPresets()}
+      proactiveEnabled={data.config.proactiveEnabled}
+      timezone={data.config.timezone}
+      workingHours={data.config.workingHours ?? null}
     />
   );
 }

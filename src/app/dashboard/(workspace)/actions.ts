@@ -56,6 +56,9 @@ export async function updateProjectConfig(
 
   const parsed = ConfigUpdateSchema.safeParse(raw);
   if (!parsed.success) return { ok: false, error: "invalid input" };
+  if (parsed.data.timezone && !isValidTimezone(parsed.data.timezone)) {
+    return { ok: false, error: "invalid timezone" };
+  }
 
   await db
     .update(kasieProjectConfig)
@@ -83,7 +86,7 @@ export async function updateWorkspaceIdentity(
 
   const parsed = WorkspaceUpdateSchema.safeParse(raw);
   if (!parsed.success) return { ok: false, error: "invalid input" };
-  if (!parsed.data.name) {
+  if (Object.values(parsed.data).every((v) => v === undefined)) {
     return { ok: false, error: "nothing to update" };
   }
 

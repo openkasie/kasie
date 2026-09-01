@@ -200,6 +200,12 @@ export const kasieProjectConfig = pgTable("kasie_project_config", {
   enabledSkillIds: jsonb("enabled_skill_ids").$type<string[]>().notNull().default([]),
   channelBindings: jsonb("channel_bindings").$type<Record<string, string>>().notNull().default({}),
   proactiveEnabled: boolean("proactive_enabled").notNull().default(true),
+  timezone: text("timezone").notNull().default("UTC"),
+  workingHours: jsonb("working_hours").$type<{
+    startHour: number;
+    endHour: number;
+    days: number[];
+  } | null>(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
 });
 

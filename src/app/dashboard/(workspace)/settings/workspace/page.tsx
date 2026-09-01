@@ -8,6 +8,11 @@ export default async function WorkspaceSettingsPage() {
   if (!data) return null;
 
   return (
-    <WorkspaceForm name={data.project.name} projectId={data.project.id} />
+    <WorkspaceForm
+      name={data.project.name}
+      projectId={data.project.id}
+      agentName={data.project.agentName}
+      systemPrompt={data.project.systemPrompt ?? ""}
+    />
   );
 }

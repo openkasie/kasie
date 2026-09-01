@@ -8,9 +8,12 @@ import {
   upsertThread,
 } from "@/lib/db/queries/projects";
 import { createRun, getRunByIdempotencyKey } from "@/lib/db/queries/runs";
+import { mcpGateway } from "@/lib/mcp/gateway";
 import { generateSlackCopy } from "@/lib/slack/copy";
 import {
   completeSlackMessage,
+  getSlackUserName,
+  postSlackApprovalRequest,
   postSlackMessage,
   removeSlackReaction,
   signalSlackProcessing,
@@ -26,9 +29,11 @@ const slackEventSchema = z.object({
       type: z.string(),
       text: z.string().optional(),
       channel: z.string().optional(),
+      channel_type: z.string().optional(),
       thread_ts: z.string().optional(),
       ts: z.string().optional(),
       bot_id: z.string().optional(),
+      user: z.string().optional(),
     })
     .optional(),
 });
@@ -85,10 +90,21 @@ export async function POST(request: Request) {
     return NextResponse.json({ ok: true, runId: existing.id });
   }
 
+  const userName =
+    event.user && botToken ? await getSlackUserName(event.user, botToken) : null;
+
+  const runInput = {
+    message: event.text,
+    channel: event.channel,
+    channelType: event.channel_type,
+    slackUserId: event.user,
+    ...(userName ? { userName } : {}),
+  };
+
   const run = await createRun({
     threadId: thread.id,
     projectId: project.id,
-    input: { message: event.text, channel: event.channel },
+    input: runInput,
     idempotencyKey,
     source: "slack",
   });
@@ -110,25 +126,37 @@ export async function POST(request: Request) {
     runId: run.id,
     projectId: project.id,
     threadId: thread.id,
-    payload: { message: event.text, channel: event.channel },
+    payload: runInput as Record<string, unknown>,
   };
 
   after(async () => {
     if (!canAck) return;
 
     try {
-      const ackText = await generateSlackCopy({
-        projectId: project.id,
-        kind: "ack",
-        context: { userMessage: event.text },
-      });
-      await postSlackMessage(channel!, ackText, botToken!, threadTs!);
+      // Verbal ack only when integrations are connected and the run may take a
+      // while; for quick answers the eyes reaction is acknowledgment enough.
+      let ackTs: string | undefined;
+      const hasTools =
+        (await mcpGateway.discoverTools(project.id).catch(() => [])).length > 0;
+      if (hasTools) {
+        const ackText = await generateSlackCopy({
+          projectId: project.id,
+          kind: "ack",
+          context: { userMessage: event.text },
+        });
+        ackTs = await postSlackMessage(channel!, ackText, botToken!, threadTs!);
+      }
 
       await enqueueAndProcess(jobPayload);
       const completed = await import("@/lib/db/queries/runs").then((m) =>
         m.getRunById(project.id, run.id),
       );
-      let text = (completed?.output as { text?: string } | null)?.text?.trim();
+      const output = completed?.output as {
+        text?: string;
+        pendingActionId?: string;
+        pendingToolName?: string;
+      } | null;
+      let text = output?.text?.trim();
       if (!text) {
         text = await generateSlackCopy({
           projectId: project.id,
@@ -142,7 +170,19 @@ export async function POST(request: Request) {
         threadTs: threadTs!,
         botToken: botToken!,
         text,
+        ackTs,
       });
+
+      if (completed?.status === "awaiting_approval" && output?.pendingActionId) {
+        await postSlackApprovalRequest({
+          channel: channel!,
+          botToken: botToken!,
+          toolName: output.pendingToolName ?? "pending action",
+          actionId: output.pendingActionId,
+          runId: run.id,
+          threadTs: threadTs!,
+        });
+      }
     } catch (err) {
       console.error("slack after() run failed", err);
       try {
