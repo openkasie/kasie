@@ -1,0 +1,55 @@
+{
+  "family": "kasie",
+  "networkMode": "awsvpc",
+  "requiresCompatibilities": ["FARGATE"],
+  "cpu": "512",
+  "memory": "1024",
+  "executionRoleArn": "arn:aws:iam::ACCOUNT:role/ecsTaskExecutionRole",
+  "taskRoleArn": "arn:aws:iam::ACCOUNT:role/kasieTaskRole",
+  "containerDefinitions": [
+    {
+      "name": "kasie-web",
+      "image": "ACCOUNT.dkr.ecr.REGION.amazonaws.com/kasie:latest",
+      "essential": true,
+      "portMappings": [{ "containerPort": 3000, "protocol": "tcp" }],
+      "environment": [
+        { "name": "DEPLOY_TARGET", "value": "ecs" },
+        { "name": "QUEUE_PROVIDER", "value": "sqs" }
+      ],
+      "secrets": [
+        { "name": "DATABASE_URL", "valueFrom": "arn:aws:secretsmanager:REGION:ACCOUNT:secret:kasie/database" },
+        { "name": "ENCRYPTION_KEY", "valueFrom": "arn:aws:secretsmanager:REGION:ACCOUNT:secret:kasie/encryption" }
+      ],
+      "logConfiguration": {
+        "logDriver": "awslogs",
+        "options": {
+          "awslogs-group": "/ecs/kasie-web",
+          "awslogs-region": "us-east-1",
+          "awslogs-stream-prefix": "web"
+        }
+      }
+    },
+    {
+      "name": "kasie-worker",
+      "image": "ACCOUNT.dkr.ecr.REGION.amazonaws.com/kasie:latest",
+      "essential": true,
+      "command": ["node", "dist/main.js"],
+      "environment": [
+        { "name": "DEPLOY_TARGET", "value": "ecs" },
+        { "name": "QUEUE_PROVIDER", "value": "sqs" }
+      ],
+      "secrets": [
+        { "name": "DATABASE_URL", "valueFrom": "arn:aws:secretsmanager:REGION:ACCOUNT:secret:kasie/database" },
+        { "name": "QUEUE_URL", "valueFrom": "arn:aws:secretsmanager:REGION:ACCOUNT:secret:kasie/queue" }
+      ],
+      "logConfiguration": {
+        "logDriver": "awslogs",
+        "options": {
+          "awslogs-group": "/ecs/kasie-worker",
+          "awslogs-region": "us-east-1",
+          "awslogs-stream-prefix": "worker"
+        }
+      }
+    }
+  ]
+}

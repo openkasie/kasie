@@ -1,0 +1,17 @@
+# ngrok CLI config (alternative to @ngrok/ngrok in npm run dev)
+#
+# 1. Copy to ~/.config/ngrok/ngrok.yml (or merge into existing config)
+# 2. Replace authtoken and domain with your values from https://dashboard.ngrok.com
+# 3. Run: ngrok start kasie
+# 4. Set APP_URL=https://YOUR-DOMAIN.ngrok-free.app in .env
+
+version: 3
+
+agent:
+  authtoken: YOUR_NGROK_AUTHTOKEN
+
+endpoints:
+  - name: kasie
+    url: kasie-dev.ngrok-free.app
+    upstream:
+      url: 3000

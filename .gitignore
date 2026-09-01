@@ -14,6 +14,10 @@
 
 # production
 /build
+/dist
+
+# agent notes
+.notes/
 
 # misc
 .DS_Store

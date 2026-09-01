@@ -1,0 +1,19 @@
+{
+  "crons": [
+    {
+      "path": "/api/cron/heartbeat",
+      "schedule": "*/5 * * * *"
+    }
+  ],
+  "functions": {
+    "src/app/api/slack/events/route.ts": {
+      "maxDuration": 60
+    },
+    "src/app/api/agent/v1/runs/route.ts": {
+      "maxDuration": 300
+    },
+    "src/app/api/cron/heartbeat/route.ts": {
+      "maxDuration": 300
+    }
+  }
+}

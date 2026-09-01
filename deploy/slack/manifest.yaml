@@ -1,0 +1,56 @@
+# Kasie Slack app manifest
+# Generate with: npm run slack:manifest -- https://your-public-origin
+# Import at api.slack.com → Create New App → From a manifest (Kasie must be deployed first).
+
+_metadata:
+  major_version: 2
+  minor_version: 0
+
+display_information:
+  name: Kasie
+  description: AI coworker for your team — @mention in channels or DM to start agent runs.
+  background_color: "#0f172a"
+
+features:
+  bot_user:
+    display_name: Kasie
+    always_online: true
+  app_home:
+    messages_tab_enabled: true
+    messages_tab_read_only_enabled: false
+
+oauth_config:
+  redirect_urls:
+    - https://your-app.example.com/api/slack/oauth/callback
+  scopes:
+    bot:
+      - app_mentions:read
+      - channels:history
+      - chat:write
+      - reactions:write
+      - groups:history
+      - im:history
+      - im:write
+      - mpim:history
+      - team:read
+      - users:read
+    user:
+      - openid
+      - email
+      - profile
+
+settings:
+  event_subscriptions:
+    request_url: https://your-app.example.com/api/slack/events
+    bot_events:
+      - app_mention
+      - message.channels
+      - message.groups
+      - message.im
+      - message.mpim
+  interactivity:
+    is_enabled: true
+    request_url: https://your-app.example.com/api/slack/interactions
+  org_deploy_enabled: false
+  socket_mode_enabled: false
+  token_rotation_enabled: false

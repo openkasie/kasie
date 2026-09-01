@@ -1,0 +1,43 @@
+services:
+  postgres:
+    image: pgvector/pgvector:pg18
+    environment:
+      POSTGRES_USER: kasie
+      POSTGRES_PASSWORD: kasie
+      POSTGRES_DB: kasie
+    ports:
+      - "5432:5432"
+    volumes:
+      - kasie_pg:/var/lib/postgresql/data
+
+  web:
+    build:
+      context: ../..
+      dockerfile: deploy/docker/Dockerfile
+    ports:
+      - "3000:3000"
+    env_file:
+      - ../../.env
+    environment:
+      DEPLOY_TARGET: docker
+      QUEUE_PROVIDER: postgres
+      DATABASE_URL: postgresql://kasie:kasie@postgres:5432/kasie
+    depends_on:
+      - postgres
+
+  worker:
+    build:
+      context: ../..
+      dockerfile: deploy/docker/Dockerfile
+    command: ["node", "dist/main.js"]
+    env_file:
+      - ../../.env
+    environment:
+      DEPLOY_TARGET: docker
+      QUEUE_PROVIDER: postgres
+      DATABASE_URL: postgresql://kasie:kasie@postgres:5432/kasie
+    depends_on:
+      - postgres
+
+volumes:
+  kasie_pg:
