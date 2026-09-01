@@ -41,7 +41,7 @@ const PROJECT_NAV: Omit<NavItemConfig, "badge">[] = [
   { href: "/dashboard/tasks", label: "Tasks", icon: CalendarCheckIcon },
   { href: "/dashboard/approvals", label: "Approvals", icon: ShieldCheckIcon },
   { href: "/dashboard/memory", label: "Memory", icon: BrainIcon },
-  { href: "/dashboard/runs", label: "Runs", icon: PlayIcon },
+  { href: "/dashboard/runs", label: "Activity", icon: PlayIcon },
   { href: "/dashboard/team", label: "Team", icon: UsersIcon },
   { href: "/dashboard/usage", label: "Usage", icon: ChartBarIcon },
   { href: "/dashboard/settings", label: "Settings", icon: GearIcon },
@@ -70,7 +70,7 @@ const SETTINGS_NAV_SECTIONS: SettingsNavSection[] = [
 ];
 
 const SIDEBAR_PANEL =
-  "flex flex-1 flex-col gap-0.5 px-2 transition-[transform,opacity] duration-300 ease-[cubic-bezier(0.16,1,0.3,1)] motion-reduce:transition-none";
+  "flex min-h-0 flex-1 flex-col gap-0.5 overflow-y-auto px-2 transition-[transform,opacity] duration-300 ease-[cubic-bezier(0.16,1,0.3,1)] motion-reduce:transition-none";
 
 type NavItemProps = {
   href: string;

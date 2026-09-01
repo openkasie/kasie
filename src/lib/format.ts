@@ -31,6 +31,16 @@ export function formatRelativeTime(date: Date, now = new Date()): string {
   return date.toISOString().slice(0, 10);
 }
 
+export function formatDuration(ms: number): string {
+  if (ms < 1000) return "<1s";
+  const sec = Math.floor(ms / 1000);
+  if (sec < 60) return `${sec}s`;
+  const min = Math.floor(sec / 60);
+  if (min < 60) return `${min}m ${sec % 60}s`;
+  const hr = Math.floor(min / 60);
+  return `${hr}h ${min % 60}m`;
+}
+
 export function humanizeCron(cron: string) {
   const parts = cron.trim().split(/\s+/);
   if (parts.length < 5) return cron;

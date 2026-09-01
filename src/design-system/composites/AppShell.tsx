@@ -36,7 +36,7 @@ export function AppShell({ sidebar, logo, children }: AppShellProps) {
   }, [open]);
 
   return (
-    <div className="flex min-h-[100dvh]">
+    <div className="flex h-dvh overflow-hidden">
       {/* Desktop rail */}
       <aside className="hidden w-[var(--sidebar-width)] shrink-0 flex-col border-r border-[var(--border-subtle)] bg-[var(--surface-subtle)] lg:flex">
         {sidebar}

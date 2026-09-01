@@ -2,6 +2,7 @@
 
 import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
+import { CheckIcon } from "@phosphor-icons/react";
 import {
   Button,
   FormFeedback,
@@ -25,6 +26,15 @@ type WorkingHours = { startHour: number; endHour: number; days: number[] };
 
 const DEFAULT_HOURS: WorkingHours = { startHour: 8, endHour: 18, days: [1, 2, 3, 4, 5] };
 const DAY_LABELS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+const DAY_NAMES = [
+  "Sunday",
+  "Monday",
+  "Tuesday",
+  "Wednesday",
+  "Thursday",
+  "Friday",
+  "Saturday",
+];
 
 type PreferencesFormProps = {
   tone: string;
@@ -339,17 +349,48 @@ export function PreferencesForm({
                     key={label}
                     type="button"
                     aria-pressed={active}
+                    aria-label={DAY_NAMES[day]}
+                    title={DAY_NAMES[day]}
                     onClick={() => toggleDay(day)}
-                    className={`rounded-lg border px-3 py-1.5 text-xs font-medium transition-colors ${
-                      active
-                        ? "border-[var(--accent)] bg-[var(--accent)]/10 text-[var(--accent)]"
-                        : "border-[var(--border)] text-[var(--fg-muted)] hover:text-[var(--fg)]"
-                    }`}
+                    className={`inline-flex cursor-pointer select-none items-center rounded-full border px-3 py-1.5 text-xs font-medium transition-[background-color,border-color,color,transform,box-shadow] duration-[var(--duration-fast)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--ring)] focus-visible:ring-offset-2 focus-visible:ring-offset-[var(--bg)] active:scale-95 motion-reduce:active:scale-100 ${active
+                        ? "border-[var(--accent)] bg-[var(--accent)]/10 text-[var(--accent)] shadow-[0_0_0_1px_var(--accent)_inset] hover:bg-[var(--accent)]/20"
+                        : "border-[var(--border)] text-[var(--fg-muted)] hover:border-[var(--border-elevated)] hover:bg-[var(--surface-subtle)] hover:text-[var(--fg)]"
+                      }`}
                   >
+                    <span
+                      aria-hidden
+                      className={`grid place-items-center overflow-hidden transition-[width,margin,opacity] duration-[var(--duration)] ease-[var(--ease-out)] motion-reduce:transition-none ${active ? "mr-1 w-3.5 opacity-100" : "mr-0 w-0 opacity-0"
+                        }`}
+                    >
+                      <CheckIcon size={12} weight="bold" />
+                    </span>
                     {label}
                   </button>
                 );
               })}
+            </div>
+            <div className="mt-2 flex items-center gap-3 text-xs">
+              <button
+                type="button"
+                onClick={() =>
+                  setHoursValue((h) => ({ ...h, days: [1, 2, 3, 4, 5] }))
+                }
+                className="cursor-pointer rounded text-[var(--fg-muted)] transition-colors hover:text-[var(--fg)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--ring)]"
+              >
+                Weekdays
+              </button>
+              <span aria-hidden className="text-[var(--border-elevated)]">
+                &middot;
+              </span>
+              <button
+                type="button"
+                onClick={() =>
+                  setHoursValue((h) => ({ ...h, days: [0, 1, 2, 3, 4, 5, 6] }))
+                }
+                className="cursor-pointer rounded text-[var(--fg-muted)] transition-colors hover:text-[var(--fg)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--ring)]"
+              >
+                Every day
+              </button>
             </div>
             <p className="mt-2 text-xs text-[var(--fg-muted)]">
               Unprompted messages are held outside these hours. Scheduled tasks run at the times you set for them.
