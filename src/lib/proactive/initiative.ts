@@ -56,6 +56,7 @@ async function fireInitiative(projectId: string, now: Date, opts: TickOptions) {
     idempotencyKey,
     source: "initiative",
   });
+  if (!run) return false;
 
   const job = {
     runId: run.id,

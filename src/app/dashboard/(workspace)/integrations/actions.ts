@@ -166,7 +166,7 @@ export async function rerunDiscoveryAction(
     return { ok: false, error: "integration not found" };
   }
 
-  after(() => enqueueIntegrationDiscovery(projectId, integrationId));
+  after(() => enqueueIntegrationDiscovery(projectId, integrationId, { force: true }));
   revalidateIntegrationPaths(row.appSlug);
   revalidatePath(`/dashboard/integrations/${row.appSlug}/${row.id}`);
   return { ok: true };

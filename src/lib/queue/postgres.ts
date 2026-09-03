@@ -1,4 +1,4 @@
-import { eq } from "drizzle-orm";
+import { and, eq, sql } from "drizzle-orm";
 import { db } from "@/lib/db/client";
 import { kasieQueueJobs } from "@/lib/db/schema";
 import type { RunJob } from "@/lib/ai/types";
@@ -35,33 +35,51 @@ export class PostgresQueue implements QueueProvider {
     return enqueued;
   }
 
-  async dequeue(): Promise<RunJob | null> {
+  async tryClaim(jobId: string): Promise<boolean> {
     const [row] = await db
-      .select()
-      .from(kasieQueueJobs)
-      .where(eq(kasieQueueJobs.status, "pending"))
-      .limit(1);
-
-    if (!row) return null;
-
-    await db
       .update(kasieQueueJobs)
       .set({ status: "processing", lockedAt: new Date() })
-      .where(eq(kasieQueueJobs.id, row.id));
+      .where(and(eq(kasieQueueJobs.id, jobId), eq(kasieQueueJobs.status, "pending")))
+      .returning({ id: kasieQueueJobs.id });
+    return row != null;
+  }
 
-    const payload = row.payload as Record<string, unknown>;
+  async dequeue(): Promise<RunJob | null> {
+    const result = await db.execute(sql`
+      UPDATE kasie_queue_jobs
+      SET status = 'processing', locked_at = NOW()
+      WHERE id = (
+        SELECT id FROM kasie_queue_jobs
+        WHERE status = 'pending'
+        ORDER BY created_at ASC
+        LIMIT 1
+        FOR UPDATE SKIP LOCKED
+      )
+      RETURNING id, run_id, project_id, payload
+    `);
+
+    const row = result.rows[0] as
+      | {
+        id: string;
+        run_id: string;
+        project_id: string;
+        payload: Record<string, unknown>;
+      }
+      | undefined;
+    if (!row) return null;
+
     const job = {
       id: row.id,
-      runId: row.runId,
-      projectId: row.projectId,
-      threadId: String(payload.threadId ?? ""),
-      payload,
+      runId: row.run_id,
+      projectId: row.project_id,
+      threadId: String(row.payload.threadId ?? ""),
+      payload: row.payload,
     };
     log.debug("job dequeued", {
       jobId: job.id,
       runId: job.runId,
       projectId: job.projectId,
-      source: payload.source ?? "message",
+      source: job.payload.source ?? "message",
     });
     return job;
   }

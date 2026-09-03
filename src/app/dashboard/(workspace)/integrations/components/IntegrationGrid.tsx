@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { CaretRightIcon } from "@phosphor-icons/react";
 import { useRouter, useSearchParams } from "next/navigation";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Chip, GlassCard, PageHeader, SearchInput } from "@/design-system";
 import type { IntegrationApp } from "@/lib/integrations/types";
 import { normalizeAppSlug } from "@/lib/pipedream/app-slug";
@@ -52,11 +52,21 @@ type IntegrationSearchProps = {
 
 function IntegrationSearch({ initialQuery, onDebouncedQuery }: IntegrationSearchProps) {
   const [draftQuery, setDraftQuery] = useState(initialQuery);
+  const pendingUrlUpdate = useRef(false);
+
+  useEffect(() => {
+    if (pendingUrlUpdate.current) {
+      pendingUrlUpdate.current = false;
+      return;
+    }
+    setDraftQuery(initialQuery);
+  }, [initialQuery]);
 
   useEffect(() => {
     if (draftQuery === initialQuery) return;
 
     const timeout = window.setTimeout(() => {
+      pendingUrlUpdate.current = true;
       onDebouncedQuery(draftQuery);
     }, 300);
 
@@ -138,7 +148,7 @@ export function IntegrationGrid({
         description="Connect the tools you use and let your agent perform tasks across apps."
       />
 
-      <IntegrationSearch key={initialQuery} initialQuery={initialQuery} onDebouncedQuery={pushQuery} />
+      <IntegrationSearch initialQuery={initialQuery} onDebouncedQuery={pushQuery} />
 
       {!pipedreamEnabled ? (
         <p className="text-sm text-[var(--fg-muted)]">

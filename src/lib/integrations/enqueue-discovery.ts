@@ -10,6 +10,7 @@ const log = createLogger("enqueue-discovery");
 export async function enqueueIntegrationDiscovery(
   projectId: string,
   integrationId: string,
+  options?: { force?: boolean },
 ) {
   const integration = await getIntegrationById(projectId, integrationId);
   if (!integration || integration.status !== "connected") {
@@ -17,8 +18,10 @@ export async function enqueueIntegrationDiscovery(
     return;
   }
 
-  const idempotencyKey = `integration-discovery:${integrationId}`;
-  const existing = await getRunByIdempotencyKey(projectId, idempotencyKey);
+  const idempotencyKey = options?.force
+    ? `integration-discovery:${integrationId}:${Date.now()}`
+    : `integration-discovery:${integrationId}`;
+  const existing = options?.force ? null : await getRunByIdempotencyKey(projectId, idempotencyKey);
   if (existing) {
     log.debug("discovery skipped", { projectId, integrationId, reason: "already queued" });
     return;
@@ -39,6 +42,10 @@ export async function enqueueIntegrationDiscovery(
     idempotencyKey,
     source: "system",
   });
+  if (!run) {
+    log.debug("discovery skipped", { projectId, integrationId, reason: "lost insert race" });
+    return;
+  }
 
   const job = await enqueueAndProcess({
     runId: run.id,

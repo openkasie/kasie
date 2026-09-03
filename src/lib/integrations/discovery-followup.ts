@@ -1,37 +1,61 @@
-import type { McpToolDescriptor } from "@/lib/mcp/gateway";
+import { formatHumanFacts } from "@/lib/integrations/probe-insights";
+
+function pickVariant<T>(seed: string, variants: T[]): T {
+  const idx = Math.abs(seed.split("").reduce((h, c) => h + c.charCodeAt(0), 0)) % variants.length;
+  return variants[idx]!;
+}
+
+function formatHighlights(
+  insights: { entity: string; relation: string; target: string }[],
+): string {
+  const lines = formatHumanFacts(insights);
+  if (lines.length === 0) {
+    return "• I looked around but didn't pull out clean highlights — happy to dig deeper if you point me at something specific.";
+  }
+  return lines.slice(0, 6).map((l) => `• ${l}`).join("\n");
+}
 
 export function buildFallbackFollowUp(input: {
   appSlug: string;
   nickname: string;
-  tools: McpToolDescriptor[];
-  triples: { entity: string; relation: string; target: string }[];
+  probeInsights?: { entity: string; relation: string; target: string }[];
 }): string {
-  const readTools = input.tools.filter((t) => t.classification === "read").slice(0, 5);
-  const writeTools = input.tools.filter((t) => t.classification === "write").slice(0, 5);
-  const memoryLines = input.triples
-    .slice(0, 6)
-    .map((t) => `• ${t.entity} → ${t.relation} → ${t.target}`);
+  const highlights = formatHighlights(input.probeInsights ?? []);
+  const intro = pickVariant(input.nickname, [
+    `I finished looking around *${input.nickname}* — here's the quick version.`,
+    `Okay, I've got my bearings on *${input.nickname}* now.`,
+    `Done poking around *${input.nickname}* — sharing what stood out.`,
+  ]);
 
-  const lines = [
-    "*Deep dive — what I indexed and what I can do*",
-    "",
-    "*Indexed into team memory*",
-    memoryLines.length > 0 ? memoryLines.join("\n") : "• Connection metadata saved",
-    "",
-    "*Available read actions*",
-    readTools.length > 0
-      ? readTools.map((t) => `• \`${t.name}\``).join("\n")
-      : "• Listing and lookup tools for this app",
-    "",
-    "*Actions that need your approval*",
-    writeTools.length > 0
-      ? writeTools.map((t) => `• \`${t.name}\``).join("\n")
-      : "• Create/update actions will appear in Approvals before they run",
-    "",
-    "*Try asking me*",
-    `• "Summarize my ${input.appSlug} repos and recent activity"`,
-    `• "What can you do with ${input.nickname}?"`,
-  ];
+  const closing = pickVariant(input.appSlug, [
+    "I've saved the useful bits to memory, so you won't need to re-explain this setup.",
+    "It's all in team memory now — just ask naturally when you need something from this connection.",
+    "You're good to ask me about this connection anytime; I won't make you repeat the context.",
+  ]);
 
-  return lines.join("\n");
+  return [
+    intro,
+    "",
+    "*Highlights*",
+    highlights,
+    "",
+    closing,
+  ].join("\n");
+}
+
+export function buildFallbackSummary(input: {
+  nickname: string;
+  factCount: number;
+}): string {
+  if (input.factCount > 0) {
+    return pickVariant(input.nickname, [
+      `Finished exploring *${input.nickname}* — found some useful context and saved it for us.`,
+      `All set on *${input.nickname}* — I mapped what's there and tucked it into memory.`,
+      `Done with *${input.nickname}* — I'll drop the highlights in this thread.`,
+    ]);
+  }
+  return pickVariant(input.nickname, [
+    `Finished exploring *${input.nickname}* — details in the thread below.`,
+    `Wrapped up on *${input.nickname}* — sharing what I could find below.`,
+  ]);
 }

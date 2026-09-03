@@ -7,13 +7,8 @@ export type PipedreamConnectMessage =
   | { type: "error"; error?: string }
   | { type: "close" };
 
-export function buildConnectIframeUrl(input: {
-  token: string;
-  appSlug: string;
-  hideClose?: boolean;
-}) {
+export function buildConnectIframeUrl(input: { token: string; appSlug: string }) {
   const qp = new URLSearchParams({ token: input.token, app: toPipedreamAppSlug(input.appSlug) });
-  if (input.hideClose) qp.set("hideClose", "true");
   return `${PIPEDREAM_CONNECT_IFRAME_URL}?${qp.toString()}`;
 }
 

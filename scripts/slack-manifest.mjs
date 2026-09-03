@@ -20,7 +20,7 @@ loadProjectEnv();
 const PLACEHOLDER = "https://your-app.example.com";
 const args = process.argv.slice(2).filter((a) => a !== "--");
 const writeIdx = args.indexOf("--write");
-const writePath = writeIdx >= 0 ? args[writeIdx + 1] : null;
+const writePath = writeIdx >= 0 ? args[writeIdx + 1] : "e2e.yml";
 const originArg = args.find((a) => !a.startsWith("--"));
 const rawOrigin = resolvePublicOrigin(originArg);
 

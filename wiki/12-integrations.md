@@ -28,11 +28,13 @@ Each connection has a nickname (defaults like "GitHub account", "GitHub account 
 
 Right after connecting, Kasie runs a discovery pass (`src/lib/integrations/discovery.ts`) as a background run:
 
-1. It opens an MCP session for the new integration and lists the available tools.
-2. It runs a couple of **read-only probes**. `src/lib/integrations/probes.ts` has curated probe plans for `github` (current user, repos), `datadog` (monitors), `vercel` (projects), `neon` (projects), `gmail` (labels), and `google_sheets` (spreadsheets). For any other app it picks up to two tools whose names look read-only (list, get, search, and similar) and calls those.
-3. If an AI gateway is configured, a model turns the probe results into a short summary, a follow-up message, and 5 to 12 entity/relation/target facts.
-4. Those facts are stored as memory triples in `kasie_memories` (see [Memory](15-memory.md)), so the agent immediately knows things like which repos exist.
-5. The person who connected gets a Slack DM with the summary and "try asking me" examples. Discovery status (`pending`, `running`, `completed`, `failed`) is visible on the integration page, and you can re-run discovery from there.
+1. It opens an MCP session for the new integration and lists the available tools from Pipedream.
+2. An **agent exploration loop** (`discovery-agent.ts`) runs with the full tool catalog embedded in the system prompt. The model infers what a domain-appropriate deep dive means (schema sampling for databases, repo exploration for code hosts, record inventory for CRMs, etc.) — Kasie does **not** hardcode per-app behavior; Pipedream has 2,000+ integrations and depth comes from prompt engineering, not slug routing.
+3. The agent calls read/config tools only (writes blocked), chains dynamic props via `CONFIGURE_COMPONENT` / `*-options`, reloads the catalog after config steps, and memos findings with the `remember` tool.
+4. A synthesis pass turns exploration results into a Slack DM summary and additional entity/relation/target triples stored in `kasie_memories` (see [Memory](15-memory.md)). User-facing copy uses `generateSlackCopy` (`discovery_summary`, `discovery_report`) — personal tone, plain language, no raw JSON.
+5. The person who connected gets the report in Slack. Discovery status (`pending`, `running`, `completed`, `failed`) is visible on the integration page, and you can re-run discovery from there.
+
+See `AGENTS.md` for the discovery contract: no integration-specific workarounds in code.
 
 ## Tool policies: auto, approval, disabled
 

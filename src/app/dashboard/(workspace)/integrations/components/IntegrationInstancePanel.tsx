@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useState, useTransition } from "react";
+import { useCallback, useEffect, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import {
   Button,
@@ -88,9 +88,12 @@ export function IntegrationInstancePanel({
     });
   }, [integration.id]);
 
+  useEffect(() => {
+    if (tab === "tools" && !toolsLoaded && !toolsLoading) loadTools();
+  }, [tab, toolsLoaded, toolsLoading, loadTools]);
+
   const handleTabChange = (id: string) => {
     setTab(id);
-    if (id === "tools" && !toolsLoaded && !toolsLoading) loadTools();
   };
 
   const save = (patch: {

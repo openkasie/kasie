@@ -47,3 +47,4 @@ graph TD
 - `integrations -> delegated-to -> pipedream-connect` (2026-08) OAuth vault plus MCP catalog covers 2,000+ apps without maintaining first-party connectors.
 - `channels -> live-on -> slack-first` (2026-08) One complete channel beats four partial ones; Teams, Google Chat, and Discord are deferred with env placeholders reserved.
 - `skills -> implemented-as -> prompt-presets` (2026-08) Skills in `src/lib/skills/catalog.ts` are toggleable prompt presets, not executable plugins.
+- `integrations -> discovery-via -> prompt-driven-agent` (2026-09) Post-connect discovery uses one agent loop with the live Pipedream MCP tool catalog in the system prompt; no per-app slug routing or integration-specific code paths.

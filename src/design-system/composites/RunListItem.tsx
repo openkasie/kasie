@@ -12,6 +12,7 @@ import {
   SparkleIcon,
 } from "@phosphor-icons/react";
 import { formatDuration, formatRelativeTime } from "@/lib/format";
+import { InlineMarkdown, SlackMrkdwn } from "@/lib/slack/render-mrkdwn";
 import { GlassCard } from "./GlassCard";
 import { RunStatusBadge } from "./RunStatusBadge";
 import { cn } from "../utils/cn";
@@ -54,11 +55,17 @@ const DATE_FMT = new Intl.DateTimeFormat("en-US", {
   minute: "2-digit",
 });
 
+function runOutputText(run: RunListItemRun): string | null {
+  const text = (run.output as { text?: string } | null)?.text?.trim();
+  return text || null;
+}
+
 export function RunListItem({ run, expandable = true }: RunListItemProps) {
   const [open, setOpen] = useState(false);
   const source = run.source ? SOURCE_META[run.source] : null;
   const SourceIcon = source?.icon;
   const duration = runDuration(run);
+  const outputText = runOutputText(run);
 
   const header = (
     <>
@@ -66,7 +73,10 @@ export function RunListItem({ run, expandable = true }: RunListItemProps) {
         {SourceIcon ? <SourceIcon size={16} /> : <CodeIcon size={16} />}
       </span>
       <span className="min-w-0 flex-1 text-left">
-        <span className="block truncate text-sm text-[var(--fg)]">{run.message}</span>
+        <InlineMarkdown
+          text={run.message}
+          className="block truncate text-sm text-[var(--fg)]"
+        />
         <span className="mt-0.5 flex flex-wrap items-center gap-x-2 text-xs text-[var(--fg-muted)]">
           {source ? <span>{source.label}</span> : null}
           <span aria-hidden>&middot;</span>
@@ -128,6 +138,13 @@ export function RunListItem({ run, expandable = true }: RunListItemProps) {
               <dd className="mt-0.5 tabular-nums">{duration ?? "N/A"}</dd>
             </div>
           </dl>
+
+          {outputText ? (
+            <div className="mt-3">
+              <p className="text-xs text-[var(--fg-muted)]">Response</p>
+              <SlackMrkdwn text={outputText} className="mt-2 text-sm" />
+            </div>
+          ) : null}
 
           <details className="mt-3 text-xs">
             <summary className="cursor-pointer text-[var(--fg-muted)] transition-colors hover:text-[var(--fg)]">

@@ -71,6 +71,11 @@ export async function getRunByIdempotencyKey(
   return run ?? null;
 }
 
+/**
+ * Creates a run. When an idempotencyKey is provided and another run with the
+ * same key already exists (including a concurrent insert losing the race on
+ * the unique index), returns null instead of creating a duplicate.
+ */
 export async function createRun(input: {
   threadId: string;
   projectId: string;
@@ -92,8 +97,11 @@ export async function createRun(input: {
       initiatedByApiKeyId: input.initiatedByApiKeyId,
       status: "queued",
     })
+    .onConflictDoNothing({
+      target: [kasieRuns.projectId, kasieRuns.idempotencyKey],
+    })
     .returning();
-  return run;
+  return run ?? null;
 }
 
 export async function updateRunStatus(

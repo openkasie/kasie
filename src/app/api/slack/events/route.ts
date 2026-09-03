@@ -114,6 +114,11 @@ export async function POST(request: Request) {
     idempotencyKey,
     source: "slack",
   });
+  if (!run) {
+    // Lost the insert race to a concurrent retry of the same Slack event.
+    const winner = await getRunByIdempotencyKey(project.id, idempotencyKey);
+    return NextResponse.json({ ok: true, runId: winner?.id ?? null });
+  }
 
   const channel = event.channel;
   const messageTs = event.ts;

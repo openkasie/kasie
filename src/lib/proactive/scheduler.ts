@@ -33,6 +33,7 @@ async function fireSchedule(schedule: Schedule, opts: TickOptions) {
     input: { message: schedule.prompt, scheduleId: schedule.id },
     source: "schedule",
   });
+  if (!run) return;
 
   const job = {
     runId: run.id,

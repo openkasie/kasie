@@ -1,18 +1,37 @@
 import { generateText } from "ai";
-import { z } from "zod";
 import type { RunContext, RunResult } from "@/lib/ai/types";
 import { getLanguageModel } from "@/lib/ai/provider";
 import { hasAiProvider } from "@/lib/env";
 import { getIntegrationById, updateDiscoveryStatus } from "@/lib/db/queries/integrations";
 import { getSlackBotToken } from "@/lib/db/queries/projects";
-import { storeMemoryTriple } from "@/lib/embeddings/memory";
-import { McpGateway } from "@/lib/mcp/gateway";
-import { probeStepsForApp } from "@/lib/integrations/probes";
-import { buildFallbackFollowUp } from "@/lib/integrations/discovery-followup";
+import { storeMemoryTriple, clearIntegrationDiscoveryMemories } from "@/lib/embeddings/memory";
+import { createDiscoverySession } from "@/lib/mcp/gateway";
+import { runAccountExploration } from "@/lib/integrations/discovery-agent";
+import {
+  buildDiscoveryMemories,
+  DISCOVERY_OWNED_RELATIONS,
+} from "@/lib/integrations/discovery-memory";
+import {
+  accountFactsOnly,
+  distillAgentNotes,
+  extractProbeInsights,
+  formatHumanFacts,
+  summarizeProbesForPrompt,
+} from "@/lib/integrations/probe-insights";
+import {
+  buildFallbackFollowUp,
+  buildFallbackSummary,
+} from "@/lib/integrations/discovery-followup";
+import {
+  formatDiscoveryFindingsForCopy,
+  isLowQualityDiscoveryCopy,
+  sanitizeDiscoverySlackText,
+} from "@/lib/integrations/discovery-copy";
 import {
   sendDiscoveryResults,
   sendDiscoveryStarted,
 } from "@/lib/slack/integration-discovery";
+import { generateSlackCopy } from "@/lib/slack/copy";
 import { db } from "@/lib/db/client";
 import { kasieInteractions } from "@/lib/db/schema";
 import { updateRunStatus } from "@/lib/db/queries/runs";
@@ -20,45 +39,66 @@ import { createLogger } from "@/lib/log";
 
 const log = createLogger("discovery");
 
-const DiscoveryOutputSchema = z.object({
-  dmSummary: z.string().min(1),
-  followUp: z.string().min(1),
-  triples: z
-    .array(
-      z.object({
-        entity: z.string().min(1),
-        relation: z.string().min(1),
-        target: z.string().min(1),
-      }),
-    )
-    .max(20),
-});
-
 type DiscoveryProbeResult = {
   toolName: string;
   ok: boolean;
+  args?: Record<string, unknown>;
   result?: unknown;
   error?: string;
 };
 
-function buildDiscoveryPrompt(input: {
-  appSlug: string;
+async function buildDiscoverySlackCopy(input: {
+  projectId: string;
   nickname: string;
-  probes: DiscoveryProbeResult[];
-}) {
-  return [
-    `Integration connected: ${input.nickname} (${input.appSlug}).`,
-    "Probe results:",
-    JSON.stringify(input.probes, null, 2),
-    "",
-    "Return JSON only with keys: dmSummary, followUp, triples.",
-    "dmSummary: Slack mrkdwn, under 600 chars — what was connected and headline findings (2-3 bullets max).",
-    "followUp: REQUIRED Slack mrkdwn thread reply with sections:",
-    "  *What I indexed* — bullets of graph memories saved",
-    "  *What I can do now* — concrete actions Kasie can take via connected tools",
-    "  *Try asking me* — 2 example prompts the operator can send",
-    "triples: array of entity/relation/target for knowledge graph (5-12 items from probe data).",
-  ].join("\n");
+  appSlug: string;
+  humanFacts: string[];
+  agentNotes: string;
+  factCount: number;
+  memoryPreview: { entity: string; relation: string; target: string }[];
+}): Promise<{ summary: string; followUp: string }> {
+  const findingsBlock = formatDiscoveryFindingsForCopy(input.humanFacts, input.memoryPreview);
+  const notes = distillAgentNotes(input.agentNotes);
+  const copyContext = {
+    integrationNickname: input.nickname,
+    appSlug: input.appSlug,
+    discoveryFindings: findingsBlock || undefined,
+    discoveryNotes: notes || undefined,
+  };
+
+  const fallbackFollowUp = buildFallbackFollowUp({
+    appSlug: input.appSlug,
+    nickname: input.nickname,
+    probeInsights: input.memoryPreview.filter((m) => m.relation !== "connected_via"),
+  });
+
+  try {
+    const [summary, followUpRaw] = await Promise.all([
+      generateSlackCopy({
+        projectId: input.projectId,
+        kind: "discovery_summary",
+        context: copyContext,
+      }),
+      generateSlackCopy({
+        projectId: input.projectId,
+        kind: "discovery_report",
+        context: copyContext,
+      }),
+    ]);
+
+    if (!summary.startsWith("[stub]") && !followUpRaw.startsWith("[stub]")) {
+      const followUp = sanitizeDiscoverySlackText(followUpRaw);
+      if (!isLowQualityDiscoveryCopy(followUp)) {
+        return { summary, followUp };
+      }
+    }
+  } catch {
+    // fall through
+  }
+
+  return {
+    summary: buildFallbackSummary({ nickname: input.nickname, factCount: input.factCount }),
+    followUp: fallbackFollowUp,
+  };
 }
 
 export async function runIntegrationDiscovery(
@@ -87,15 +127,24 @@ export async function runIntegrationDiscovery(
     metadata: { integrationId },
   });
 
-  const gateway = new McpGateway();
-  const probes: DiscoveryProbeResult[] = [];
+  let probes: DiscoveryProbeResult[] = [];
+  let agentNotes = "";
   let dmThread: { channel: string; threadTs: string } | null = null;
+  const session = await createDiscoverySession({
+    projectId: ctx.projectId,
+    integrationId,
+  });
+
+  if (!session) {
+    throw new Error("failed to open discovery session");
+  }
 
   try {
     if (integration.createdByUserId) {
       const botToken = await getSlackBotToken(ctx.projectId);
       if (botToken) {
         dmThread = await sendDiscoveryStarted({
+          projectId: ctx.projectId,
           userId: integration.createdByUserId,
           botToken,
           nickname: integration.nickname,
@@ -104,77 +153,104 @@ export async function runIntegrationDiscovery(
       }
     }
 
-    const descriptors = await gateway.discoverTools(
-      ctx.projectId,
-      integration.createdByUserId ?? undefined,
-    );
-    const appTools = descriptors.filter((t) => t.appSlug === integration.appSlug);
-    const toolNames = appTools.map((t) => t.name);
-    const steps = probeStepsForApp(integration.appSlug, toolNames);
-    dl.info("probe plan built", { stepCount: steps.length, toolCount: toolNames.length });
+    const appTools = await session.listTools();
+    dl.info("tool catalog loaded", { toolCount: appTools.length });
 
-    for (const step of steps) {
-      dl.debug("probe step started", { toolName: step.toolName });
-      const exec = await gateway.executeTool({
-        projectId: ctx.projectId,
-        userId: integration.createdByUserId ?? undefined,
-        toolName: step.toolName,
-        args: step.args ?? {},
-      });
-      probes.push({
-        toolName: step.toolName,
-        ok: exec.ok,
-        result: exec.result,
-        error: exec.ok ? undefined : String((exec.result as { error?: string })?.error ?? "failed"),
-      });
-      dl.info("probe step finished", { toolName: step.toolName, ok: exec.ok });
-    }
-
-    let dmSummary = `Connected *${integration.nickname}* (${integration.appSlug}). Discovery is complete — ask me to use this integration in Slack or the dashboard.`;
-    const triples: { entity: string; relation: string; target: string }[] = [
-      {
-        entity: integration.nickname,
-        relation: "connected_via",
-        target: integration.appSlug,
-      },
-    ];
-    let followUp = "";
-
-    if (hasAiProvider() && probes.length > 0) {
-      const { text } = await generateText({
-        model: await getLanguageModel(ctx.config.modelTier),
-        system:
-          "You analyze integration probe results for an AI coworker. Output valid JSON only.",
-        prompt: buildDiscoveryPrompt({
-          appSlug: integration.appSlug,
+    if (hasAiProvider() && appTools.length > 0) {
+      const exploration = await runAccountExploration({
+        ctx,
+        session,
+        integration: {
           nickname: integration.nickname,
-          probes,
-        }),
+          appSlug: integration.appSlug,
+        },
+        initialTools: appTools,
       });
-
-      try {
-        const jsonMatch = text.match(/\{[\s\S]*\}/);
-        const parsed = DiscoveryOutputSchema.parse(
-          JSON.parse(jsonMatch?.[0] ?? text),
-        );
-        dmSummary = parsed.dmSummary;
-        followUp = parsed.followUp;
-        triples.push(...parsed.triples);
-      } catch (err) {
-        dl.error("discovery parse failed", undefined, err);
-      }
+      probes = exploration.probes;
+      agentNotes = exploration.agentNotes;
+      dl.info("account exploration finished", {
+        probeCount: probes.length,
+        meaningfulProbes: summarizeProbesForPrompt(probes).length,
+      });
     }
 
-    if (!followUp) {
-      followUp = buildFallbackFollowUp({
-        appSlug: integration.appSlug,
+    const probeInsights = extractProbeInsights(integration.nickname, probes);
+    const accountFacts = accountFactsOnly(probeInsights);
+    const humanFacts = formatHumanFacts(accountFacts);
+    dl.info("probe insights extracted", {
+      insightCount: probeInsights.length,
+      accountFactCount: accountFacts.length,
+      humanFactCount: humanFacts.length,
+    });
+    if (probes.some((p) => p.ok && p.result != null) && accountFacts.length === 0) {
+      dl.warn("probes returned data but no account facts extracted — using narrative fallback");
+    }
+
+    let dmSummary = buildFallbackSummary({
+      nickname: integration.nickname,
+      factCount: accountFacts.length,
+    });
+    const memoryPreview = buildDiscoveryMemories({
+      entity: integration.nickname,
+      appSlug: integration.appSlug,
+      facts: accountFacts,
+      humanFacts,
+    });
+    let followUp = buildFallbackFollowUp({
+      appSlug: integration.appSlug,
+      nickname: integration.nickname,
+      probeInsights: memoryPreview.filter((m) => m.relation !== "connected_via"),
+    });
+
+    if (hasAiProvider()) {
+      const copy = await buildDiscoverySlackCopy({
+        projectId: ctx.projectId,
         nickname: integration.nickname,
-        tools: appTools,
-        triples,
+        appSlug: integration.appSlug,
+        humanFacts,
+        agentNotes,
+        factCount: accountFacts.length,
+        memoryPreview,
       });
+      dmSummary = copy.summary;
+      followUp = copy.followUp;
     }
 
-    for (const triple of triples) {
+    const narrativeForMemory = [
+      distillAgentNotes(agentNotes, 400),
+      dmSummary,
+      followUp.slice(0, 400),
+    ]
+      .filter(Boolean)
+      .join(" ")
+      .replace(/\s+/g, " ")
+      .trim()
+      .slice(0, 900);
+
+    const triples = buildDiscoveryMemories({
+      entity: integration.nickname,
+      appSlug: integration.appSlug,
+      facts: accountFacts,
+      humanFacts,
+      narrativeSummary: narrativeForMemory || undefined,
+    });
+    dl.info("discovery memories consolidated", { memoryCount: triples.length });
+
+    const seen = new Set<string>();
+    const dedupedTriples = triples.filter((triple) => {
+      const key = `${triple.entity}|${triple.relation}|${triple.target}`;
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+
+    await clearIntegrationDiscoveryMemories(
+      ctx.projectId,
+      integration.nickname,
+      DISCOVERY_OWNED_RELATIONS,
+    );
+
+    for (const triple of dedupedTriples) {
       await storeMemoryTriple({
         projectId: ctx.projectId,
         entity: triple.entity,
@@ -198,6 +274,7 @@ export async function runIntegrationDiscovery(
       const botToken = await getSlackBotToken(ctx.projectId);
       if (botToken) {
         const thread = await sendDiscoveryStarted({
+          projectId: ctx.projectId,
           userId: integration.createdByUserId,
           botToken,
           nickname: integration.nickname,
@@ -224,13 +301,20 @@ export async function runIntegrationDiscovery(
       runId: ctx.runId,
       role: "assistant",
       content: dmSummary,
-      metadata: { probes, triples: triples.length },
+      metadata: {
+        probes,
+        triples: dedupedTriples.length,
+        accountFacts: accountFacts.length,
+        strategy: "prompt-driven",
+        exploration: distillAgentNotes(agentNotes, 2000),
+      },
     });
 
     await updateRunStatus(ctx.runId, "completed", { text: dmSummary });
     dl.info("discovery completed", {
       probeCount: probes.length,
-      tripleCount: triples.length,
+      tripleCount: dedupedTriples.length,
+      accountFactCount: accountFacts.length,
       summaryLength: dmSummary.length,
     });
     return { text: dmSummary };
@@ -242,6 +326,6 @@ export async function runIntegrationDiscovery(
     });
     throw err;
   } finally {
-    await gateway.close();
+    await session.close();
   }
 }

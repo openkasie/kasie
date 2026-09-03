@@ -10,10 +10,18 @@ import { resolveExternalUserId } from "@/lib/pipedream/external-user-id";
 import { getPipedreamAccessToken } from "@/lib/pipedream/client";
 import { createLogger } from "@/lib/log";
 import { classifyTool } from "./classify-tool";
+import type { McpInputSchema, McpToolAnnotations } from "./tool-schema";
 
 const log = createLogger("mcp");
 
 const MCP_SERVER_URL = "https://remote.mcp.pipedream.net/v3";
+
+type McpToolDefinition = {
+  name: string;
+  description?: string;
+  inputSchema?: McpInputSchema;
+  annotations?: McpToolAnnotations;
+};
 
 export type McpToolDescriptor = {
   name: string;
@@ -21,6 +29,9 @@ export type McpToolDescriptor = {
   classification: "read" | "write";
   appSlug: string;
   integrationId: string;
+  inputSchema?: McpInputSchema;
+  readOnlyHint?: boolean;
+  destructiveHint?: boolean;
 };
 
 type IntegrationClient = {
@@ -29,7 +40,86 @@ type IntegrationClient = {
   toolPolicies: Record<string, "auto" | "approval" | "disabled">;
   client: MCPClient;
   tools: Record<string, unknown>;
+  definitions: Map<string, McpToolDefinition>;
 };
+
+async function listAllToolDefinitions(client: MCPClient): Promise<McpToolDefinition[]> {
+  let page = await client.listTools();
+  const all: McpToolDefinition[] = page.tools.map((tool) => ({
+    name: tool.name,
+    description: tool.description,
+    inputSchema: tool.inputSchema as McpInputSchema | undefined,
+    annotations: tool.annotations as McpToolAnnotations | undefined,
+  }));
+
+  while (page.nextCursor) {
+    page = await client.listTools({ params: { cursor: page.nextCursor } });
+    all.push(
+      ...page.tools.map((tool) => ({
+        name: tool.name,
+        description: tool.description,
+        inputSchema: tool.inputSchema as McpInputSchema | undefined,
+        annotations: tool.annotations as McpToolAnnotations | undefined,
+      })),
+    );
+  }
+
+  return all;
+}
+
+function resolveClassification(
+  name: string,
+  annotations?: McpToolAnnotations,
+): "read" | "write" {
+  const fromName = classifyTool(name);
+  if (fromName === "write" || annotations?.destructiveHint === true) return "write";
+  if (annotations?.readOnlyHint === true) return "read";
+  return fromName;
+}
+
+function descriptorsForEntry(entry: IntegrationClient): McpToolDescriptor[] {
+  const names = new Set([...entry.definitions.keys(), ...Object.keys(entry.tools)]);
+  const descriptors: McpToolDescriptor[] = [];
+
+  for (const name of names) {
+    const def = entry.definitions.get(name);
+    const tool = entry.tools[name];
+    const fallbackDescription =
+      typeof tool === "object" &&
+        tool !== null &&
+        "description" in tool &&
+        typeof (tool as { description?: unknown }).description === "string"
+        ? (tool as { description: string }).description
+        : name;
+
+    descriptors.push(
+      toDescriptor(
+        entry,
+        def ?? { name, description: fallbackDescription },
+        fallbackDescription,
+      ),
+    );
+  }
+
+  return descriptors;
+}
+
+function toDescriptor(
+  entry: Pick<IntegrationClient, "appSlug" | "integrationId">,
+  def: McpToolDefinition,
+  fallbackDescription: string,
+): McpToolDescriptor {
+  return {
+    name: def.name,
+    description: def.description ?? fallbackDescription,
+    classification: resolveClassification(def.name, def.annotations),
+    appSlug: entry.appSlug,
+    integrationId: entry.integrationId,
+    inputSchema: def.inputSchema,
+    readOnlyHint: def.annotations?.readOnlyHint,
+    destructiveHint: def.annotations?.destructiveHint,
+  };
+}
 
 async function openClientForIntegration(integration: {
   id: string;
@@ -61,17 +151,23 @@ async function openClientForIntegration(integration: {
         "x-pd-external-user-id": externalUserId,
         "x-pd-app-slug": toPipedreamAppSlug(integration.appSlug),
         "x-pd-account-id": integration.accountId,
+        "x-pd-registry": "all",
       },
     },
   });
 
-  const tools = await client.tools();
+  const [tools, definitions] = await Promise.all([
+    client.tools(),
+    listAllToolDefinitions(client),
+  ]);
+
   return {
     integrationId: integration.id,
     appSlug: integration.appSlug,
     toolPolicies: integration.toolPolicies ?? {},
     client,
     tools,
+    definitions: new Map(definitions.map((def) => [def.name, def])),
   };
 }
 
@@ -111,7 +207,7 @@ export class McpGateway {
           log.info("mcp client opened", {
             projectId,
             appSlug: integration.appSlug,
-            toolCount: Object.keys(entry.tools).length,
+            toolCount: descriptorsForEntry(entry).length,
           });
         }
       } catch (err) {
@@ -126,23 +222,7 @@ export class McpGateway {
     const descriptors: McpToolDescriptor[] = [];
 
     for (const entry of loaded) {
-      for (const [name, tool] of Object.entries(entry.tools)) {
-        const description =
-          typeof tool === "object" &&
-            tool !== null &&
-            "description" in tool &&
-            typeof (tool as { description?: unknown }).description === "string"
-            ? (tool as { description: string }).description
-            : name;
-
-        descriptors.push({
-          name,
-          description,
-          classification: classifyTool(name),
-          appSlug: entry.appSlug,
-          integrationId: entry.integrationId,
-        });
-      }
+      descriptors.push(...descriptorsForEntry(entry));
     }
 
     return descriptors;
@@ -153,7 +233,11 @@ export class McpGateway {
     const merged: Record<string, unknown> = {};
     for (const entry of loaded) {
       for (const [name, tool] of Object.entries(entry.tools)) {
-        const policy = entry.toolPolicies[name] ?? (classifyTool(name) === "write" ? "approval" : "auto");
+        const policy =
+          entry.toolPolicies[name] ??
+          (resolveClassification(name, entry.definitions.get(name)?.annotations) === "write"
+            ? "approval"
+            : "auto");
         if (policy === "disabled") continue;
         merged[name] = tool;
       }
@@ -167,7 +251,9 @@ export class McpGateway {
   ): "auto" | "approval" | "disabled" {
     return (
       entry.toolPolicies[toolName] ??
-      (classifyTool(toolName) === "write" ? "approval" : "auto")
+      (resolveClassification(toolName, entry.definitions.get(toolName)?.annotations) === "write"
+        ? "approval"
+        : "auto")
     );
   }
 
@@ -254,9 +340,44 @@ export async function discoverToolsForIntegration(input: {
   projectId: string;
   integrationId: string;
 }): Promise<McpToolDescriptor[]> {
+  const session = await createDiscoverySession(input);
+  if (!session) return [];
+  try {
+    return await session.listTools();
+  } finally {
+    await session.close();
+  }
+}
+
+export type DiscoverySession = {
+  listTools(): Promise<McpToolDescriptor[]>;
+  getAiTools(): Promise<Record<string, unknown>>;
+  reloadTools(): Promise<McpToolDescriptor[]>;
+  executeProbe(input: {
+    toolName: string;
+    args: Record<string, unknown>;
+  }): Promise<{ ok: boolean; result?: unknown; error?: string }>;
+  close(): Promise<void>;
+};
+
+async function refreshIntegrationTools(entry: IntegrationClient): Promise<McpToolDescriptor[]> {
+  const [tools, definitions] = await Promise.all([
+    entry.client.tools(),
+    listAllToolDefinitions(entry.client),
+  ]);
+  entry.tools = tools;
+  entry.definitions = new Map(definitions.map((def) => [def.name, def]));
+  return descriptorsForEntry(entry);
+}
+
+/** Long-lived MCP session for integration discovery with tool reload support. */
+export async function createDiscoverySession(input: {
+  projectId: string;
+  integrationId: string;
+}): Promise<DiscoverySession | null> {
   const { getIntegrationById } = await import("@/lib/db/queries/integrations");
   const integration = await getIntegrationById(input.projectId, input.integrationId);
-  if (!integration?.accountId || !integration.enabled) return [];
+  if (!integration?.accountId || !integration.enabled) return null;
 
   const entry = await openClientForIntegration({
     id: integration.id,
@@ -267,29 +388,56 @@ export async function discoverToolsForIntegration(input: {
     projectId: input.projectId,
     toolPolicies: integration.toolPolicies ?? {},
   });
-  if (!entry) return [];
+  if (!entry) return null;
 
-  try {
-    const descriptors: McpToolDescriptor[] = [];
-    for (const [name, tool] of Object.entries(entry.tools)) {
-      const description =
-        typeof tool === "object" &&
-          tool !== null &&
-          "description" in tool &&
-          typeof (tool as { description?: unknown }).description === "string"
-          ? (tool as { description: string }).description
-          : name;
+  let closed = false;
 
-      descriptors.push({
-        name,
-        description,
-        classification: classifyTool(name),
-        appSlug: entry.appSlug,
-        integrationId: entry.integrationId,
-      });
-    }
-    return descriptors;
-  } finally {
-    await entry.client.close();
-  }
+  return {
+    async listTools() {
+      if (closed) return [];
+      return descriptorsForEntry(entry);
+    },
+
+    async getAiTools() {
+      if (closed) return {};
+      return entry.tools;
+    },
+
+    async reloadTools() {
+      if (closed) return [];
+      return refreshIntegrationTools(entry);
+    },
+
+    async executeProbe({ toolName, args }) {
+      if (closed) {
+        return { ok: false, error: "session closed" };
+      }
+
+      const tool = entry.tools[toolName];
+      if (!tool || typeof tool !== "object" || tool === null || !("execute" in tool)) {
+        return { ok: false, error: "unknown tool" };
+      }
+
+      try {
+        const execute = (tool as { execute: (a: unknown) => Promise<unknown> }).execute;
+        const result = await execute(args);
+        return { ok: true, result };
+      } catch (err) {
+        return {
+          ok: false,
+          error: err instanceof Error ? err.message : "tool execution failed",
+        };
+      }
+    },
+
+    async close() {
+      if (closed) return;
+      closed = true;
+      try {
+        await entry.client.close();
+      } catch {
+        // ignore close errors
+      }
+    },
+  };
 }

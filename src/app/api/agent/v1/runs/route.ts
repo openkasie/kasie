@@ -57,6 +57,21 @@ export async function POST(request: Request) {
     source: "api",
     initiatedByApiKeyId: auth.keyId,
   });
+  if (!run) {
+    // Lost the insert race to a concurrent request with the same key.
+    const existing = body.idempotency_key
+      ? await getRunByIdempotencyKey(project.id, body.idempotency_key)
+      : null;
+    if (!existing) {
+      return NextResponse.json({ error: "run creation failed" }, { status: 500 });
+    }
+    return NextResponse.json({
+      id: existing.id,
+      thread_id: existing.threadId,
+      status: existing.status,
+      output: existing.output,
+    });
+  }
 
   after(async () => {
     await enqueueAndProcess({

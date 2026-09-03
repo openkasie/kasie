@@ -36,11 +36,16 @@ export function ConnectIntegrationModal({
   const [pending, start] = useTransition();
   const [connectUrl, setConnectUrl] = useState<string | null>(null);
   const integrationIdRef = useRef<string | null>(null);
+  const finishingRef = useRef(false);
 
   const finishConnect = useCallback(
     async (accountId: string) => {
+      if (finishingRef.current) return;
+      finishingRef.current = true;
+
       const integrationId = integrationIdRef.current;
       if (!integrationId) {
+        finishingRef.current = false;
         setError("Missing integration record");
         setPhase("configure");
         setConnectUrl(null);
@@ -49,6 +54,7 @@ export function ConnectIntegrationModal({
 
       const result = await completeIntegrationAction({ integrationId, accountId });
       if (!result.ok) {
+        finishingRef.current = false;
         setError(result.error);
         setPhase("configure");
         setConnectUrl(null);
@@ -90,7 +96,13 @@ export function ConnectIntegrationModal({
     };
 
     window.addEventListener("message", onMessage);
-    return () => window.removeEventListener("message", onMessage);
+    // The configure modal is closed during connect, so lock scroll ourselves.
+    const previous = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    return () => {
+      window.removeEventListener("message", onMessage);
+      document.body.style.overflow = previous;
+    };
   }, [phase, connectUrl, finishConnect]);
 
   const connect = useCallback(() => {
@@ -112,13 +124,7 @@ export function ConnectIntegrationModal({
           integrationId: string;
         };
         integrationIdRef.current = data.integrationId;
-        setConnectUrl(
-          buildConnectIframeUrl({
-            token: data.token,
-            appSlug,
-            hideClose: true,
-          }),
-        );
+        setConnectUrl(buildConnectIframeUrl({ token: data.token, appSlug }));
         setPhase("connecting");
       } catch (err) {
         setError(err instanceof Error ? err.message : "Connection failed");
@@ -127,24 +133,33 @@ export function ConnectIntegrationModal({
   }, [pipedreamEnabled, appSlug, visibility]);
 
   const handleClose = useCallback(() => {
+    finishingRef.current = false;
     setPhase("configure");
     setConnectUrl(null);
     onClose();
   }, [onClose]);
 
+  // The dialog also closes when the connect iframe takes over; only treat it
+  // as a user dismissal while still on the configure step.
+  const handleModalClose = useCallback(() => {
+    if (phase === "connecting") return;
+    handleClose();
+  }, [phase, handleClose]);
+
   return (
-    <Modal
-      open={open}
-      onClose={handleClose}
-      className={phase === "connecting" ? "max-w-md overflow-hidden" : undefined}
-    >
+    <>
       {phase === "connecting" && connectUrl ? (
         <iframe
           src={connectUrl}
           title={`Connect ${appLabel}`}
-          className="block h-[32rem] w-full border-0"
+          // color-scheme must match the embedded (light) page: on a mismatch,
+          // Chromium paints an opaque canvas behind cross-origin iframes and
+          // the overlay loses its transparency.
+          className="fixed inset-0 z-50 h-full w-full border-0 bg-transparent [color-scheme:light]"
         />
-      ) : (
+      ) : null}
+
+      <Modal open={open && phase === "configure"} onClose={handleModalClose}>
         <div className="p-6">
           <div className="flex items-start justify-between gap-4">
             <div>
@@ -205,7 +220,7 @@ export function ConnectIntegrationModal({
             </Button>
           </div>
         </div>
-      )}
-    </Modal>
+      </Modal>
+    </>
   );
 }

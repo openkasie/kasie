@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { and, desc, eq, ilike, sql } from "drizzle-orm";
+import { and, desc, eq, ilike, inArray, sql } from "drizzle-orm";
 import { embedText } from "@/lib/ai/compat";
 import { db } from "@/lib/db/client";
 import { kasieMemories } from "@/lib/db/schema";
@@ -80,6 +80,24 @@ export async function storeMemoryTriple(input: {
   });
 }
 
+/** Remove prior discovery-scoped facts for an integration entity before re-indexing. */
+export async function clearIntegrationDiscoveryMemories(
+  projectId: string,
+  entity: string,
+  relations: readonly string[],
+) {
+  if (relations.length === 0) return;
+  await db
+    .delete(kasieMemories)
+    .where(
+      and(
+        eq(kasieMemories.projectId, projectId),
+        eq(kasieMemories.entity, entity),
+        inArray(kasieMemories.relation, [...relations]),
+      ),
+    );
+}
+
 export type MemoryTriple = { entity: string; relation: string; target: string };
 
 const TRIPLE_COLUMNS = {
@@ -119,16 +137,16 @@ export async function retrieveMemories(
   const nameFragment = opts.speakerName?.trim().split(/\s+/)[0]?.toLowerCase();
   const speakerPass = nameFragment
     ? db
-        .select(TRIPLE_COLUMNS)
-        .from(kasieMemories)
-        .where(
-          and(
-            eq(kasieMemories.projectId, projectId),
-            ilike(kasieMemories.entity, `person:%${nameFragment}%`),
-          ),
-        )
-        .orderBy(desc(kasieMemories.timestamp))
-        .limit(limit)
+      .select(TRIPLE_COLUMNS)
+      .from(kasieMemories)
+      .where(
+        and(
+          eq(kasieMemories.projectId, projectId),
+          ilike(kasieMemories.entity, `person:%${nameFragment}%`),
+        ),
+      )
+      .orderBy(desc(kasieMemories.timestamp))
+      .limit(limit)
     : Promise.resolve([] as MemoryTriple[]);
 
   const [topical, speaker] = await Promise.all([topicPass, speakerPass]);

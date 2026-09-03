@@ -52,3 +52,16 @@ test("parseInlineMarkdown handles GitHub double-asterisk bold", () => {
     { type: "text", value: " for a repository." },
   ]);
 });
+
+test("parseInlineMarkdown handles integration discovery dmSummary", () => {
+  const nodes = parseInlineMarkdown(
+    "Connected *Neon Postgres account* (neon_postgres). Completed discovery — mapped *31* facts.",
+  );
+  assert.deepEqual(nodes, [
+    { type: "text", value: "Connected " },
+    { type: "bold", value: "Neon Postgres account" },
+    { type: "text", value: " (neon_postgres). Completed discovery — mapped " },
+    { type: "bold", value: "31" },
+    { type: "text", value: " facts." },
+  ]);
+});

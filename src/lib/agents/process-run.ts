@@ -73,6 +73,18 @@ export async function processRunJob(job: RunJob, hooks?: RunHooks) {
 export async function enqueueAndProcess(job: Omit<RunJob, "id">, hooks?: RunHooks) {
   const queue = getQueue();
   const enqueued = await queue.enqueue(job);
+
+  const claimed = await queue.tryClaim(enqueued.id);
+  if (!claimed) {
+    log.info("run deferred to worker", {
+      jobId: enqueued.id,
+      runId: enqueued.runId,
+      projectId: enqueued.projectId,
+      source: enqueued.payload.source ?? "message",
+    });
+    return enqueued;
+  }
+
   log.info("run enqueued for inline processing", {
     jobId: enqueued.id,
     runId: enqueued.runId,

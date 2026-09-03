@@ -13,7 +13,7 @@
     "db:fresh": "node scripts/db.mjs fresh",
     "lint": "eslint .",
     "typecheck": "tsc --noEmit",
-    "test": "node --experimental-strip-types --test src/lib/usage/cost.test.ts src/lib/slack/slack-auth.test.ts src/lib/slack/message.test.ts src/lib/slack/mrkdwn.test.ts src/lib/slack/render-mrkdwn.test.ts src/lib/slack/copy.test.ts src/lib/ai/compat/dialect.test.ts src/lib/ai/compat/resolve.test.ts src/lib/ai/tier-defaults.test.ts src/lib/pipedream/app-slug.test.ts src/lib/proactive/cron.test.ts src/lib/proactive/gates.test.ts src/lib/proactive/initiative-prompt.test.ts src/lib/agents/system-prompt.test.ts src/lib/agents/history.test.ts src/lib/slack/react-sentinel.test.ts",
+    "test": "node --experimental-strip-types --test src/lib/usage/cost.test.ts src/lib/slack/slack-auth.test.ts src/lib/slack/message.test.ts src/lib/slack/mrkdwn.test.ts src/lib/slack/render-mrkdwn.test.ts src/lib/slack/copy.test.ts src/lib/ai/compat/dialect.test.ts src/lib/ai/compat/resolve.test.ts src/lib/ai/tier-defaults.test.ts src/lib/pipedream/app-slug.test.ts src/lib/proactive/cron.test.ts src/lib/proactive/gates.test.ts src/lib/proactive/initiative-prompt.test.ts src/lib/agents/system-prompt.test.ts src/lib/agents/history.test.ts src/lib/slack/react-sentinel.test.ts src/lib/integrations/probe-planner.test.ts src/lib/integrations/probe-insights.test.ts src/lib/integrations/discovery-strategies.test.ts src/lib/integrations/discovery-memory.test.ts src/lib/integrations/discovery-copy.test.ts",
     "slack:manifest": "node scripts/slack-manifest.mjs"
   },
   "dependencies": {

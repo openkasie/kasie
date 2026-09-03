@@ -254,7 +254,7 @@ export const kasieRuns = pgTable(
   },
   (t) => [
     index("kasie_runs_project_idx").on(t.projectId),
-    index("kasie_runs_idempotency_idx").on(t.projectId, t.idempotencyKey),
+    uniqueIndex("kasie_runs_idempotency_idx").on(t.projectId, t.idempotencyKey),
     index("kasie_runs_source_idx").on(t.projectId, t.source),
   ],
 );
